@@ -19,14 +19,8 @@
     <Filter Include="Source Files\libs\detours">
       <UniqueIdentifier>{0494e4bd-8e86-409c-8a99-b9bedcb95375}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\libs\imgui">
-      <UniqueIdentifier>{395abe27-88a2-432f-b14a-40b086f1267f}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Header Files\libs">
       <UniqueIdentifier>{81f59066-ccd2-4d38-9d75-7b8c7515cd8c}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Header Files\libs\imgui">
-      <UniqueIdentifier>{8938b32a-d8a2-4213-8d08-39428fe36a25}</UniqueIdentifier>
     </Filter>
     <Filter Include="Header Files\libs\detours">
       <UniqueIdentifier>{92c2dc3d-92af-4de8-a5b3-381e6c798c83}</UniqueIdentifier>
@@ -41,21 +35,6 @@
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
       <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\imgui_widgets.cpp">
-      <Filter>Source Files\libs\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\imgui.cpp">
-      <Filter>Source Files\libs\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\imgui_demo.cpp">
-      <Filter>Source Files\libs\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\imgui_draw.cpp">
-      <Filter>Source Files\libs\imgui</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\imgui_tables.cpp">
-      <Filter>Source Files\libs\imgui</Filter>
     </ClCompile>
     <ClCompile Include="libs\detours\src\disolx86.cpp">
       <Filter>Source Files\libs\detours</Filter>
@@ -78,19 +57,13 @@
     <ClCompile Include="libs\detours\src\disolarm.cpp">
       <Filter>Source Files\libs\detours</Filter>
     </ClCompile>
-    <ClCompile Include="libs\imgui\backends\imgui_impl_win32.cpp">
-      <Filter>Source Files\libs\detours</Filter>
-    </ClCompile>
-    <ClCompile Include="libs\imgui\backends\imgui_impl_dx11.cpp">
-      <Filter>Source Files\libs\detours</Filter>
-    </ClCompile>
     <ClCompile Include="GAME_LEVEL_MANAGER.cpp">
       <Filter>Source Files\Game</Filter>
     </ClCompile>
     <ClCompile Include="DevTools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Menu.cpp">
+    <ClCompile Include="KeyHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="WebSocketHandler.cpp">
@@ -98,35 +71,11 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="libs\imgui\imconfig.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\imgui.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\imgui_internal.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\imstb_rectpack.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\imstb_textedit.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\imstb_truetype.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
     <ClInclude Include="libs\detours\src\detours.h">
       <Filter>Header Files\libs\detours</Filter>
     </ClInclude>
     <ClInclude Include="libs\detours\src\detver.h">
       <Filter>Header Files\libs\detours</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\backends\imgui_impl_win32.h">
-      <Filter>Header Files\libs\imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="libs\imgui\backends\imgui_impl_dx11.h">
-      <Filter>Header Files\libs\imgui</Filter>
     </ClInclude>
     <ClInclude Include="GAME_LEVEL_MANAGER.h">
       <Filter>Header Files\Game</Filter>
@@ -134,7 +83,7 @@
     <ClInclude Include="DevTools.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Menu.h">
+    <ClInclude Include="KeyHandler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WebSocketHandler.h">

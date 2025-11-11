@@ -46,7 +46,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir)libs/imgui/;$(SolutionDir)libs/detours/src/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)libs/detours/src/;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -68,14 +68,7 @@
     <ClCompile Include="libs\detours\src\disolx86.cpp" />
     <ClCompile Include="libs\detours\src\image.cpp" />
     <ClCompile Include="libs\detours\src\modules.cpp" />
-    <ClCompile Include="libs\imgui\backends\imgui_impl_dx11.cpp" />
-    <ClCompile Include="libs\imgui\backends\imgui_impl_win32.cpp" />
-    <ClCompile Include="libs\imgui\imgui.cpp" />
-    <ClCompile Include="libs\imgui\imgui_demo.cpp" />
-    <ClCompile Include="libs\imgui\imgui_draw.cpp" />
-    <ClCompile Include="libs\imgui\imgui_tables.cpp" />
-    <ClCompile Include="libs\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="Menu.cpp" />
+    <ClCompile Include="KeyHandler.cpp" />
     <ClCompile Include="WebSocketHandler.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -83,16 +76,8 @@
     <ClInclude Include="GAME_LEVEL_MANAGER.h" />
     <ClInclude Include="libs\detours\src\detours.h" />
     <ClInclude Include="libs\detours\src\detver.h" />
-    <ClInclude Include="libs\imgui\backends\imgui_impl_dx11.h" />
-    <ClInclude Include="libs\imgui\backends\imgui_impl_win32.h" />
-    <ClInclude Include="libs\imgui\imconfig.h" />
-    <ClInclude Include="libs\imgui\imgui.h" />
-    <ClInclude Include="libs\imgui\imgui_internal.h" />
-    <ClInclude Include="libs\imgui\imstb_rectpack.h" />
-    <ClInclude Include="libs\imgui\imstb_textedit.h" />
-    <ClInclude Include="libs\imgui\imstb_truetype.h" />
     <ClInclude Include="libs\json.hpp" />
-    <ClInclude Include="Menu.h" />
+    <ClInclude Include="KeyHandler.h" />
     <ClInclude Include="WebSocketHandler.h" />
   </ItemGroup>
   <ItemGroup>
