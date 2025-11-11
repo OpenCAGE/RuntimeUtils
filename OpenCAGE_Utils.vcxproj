@@ -93,6 +93,7 @@
     <ClInclude Include="libs\imgui\imstb_rectpack.h" />
     <ClInclude Include="libs\imgui\imstb_textedit.h" />
     <ClInclude Include="libs\imgui\imstb_truetype.h" />
+    <ClInclude Include="libs\json.hpp" />
     <ClInclude Include="Menu.h" />
     <ClInclude Include="WebSocketHandler.h" />
   </ItemGroup>

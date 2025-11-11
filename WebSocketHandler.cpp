@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <vector>
 #include <wincrypt.h>
+#include "libs/json.hpp"
+
+using json = nlohmann::json;
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "crypt32.lib")
@@ -180,48 +183,34 @@ bool WebSocketHandler::HandleWebSocketHandshake(SOCKET clientSocket, const std::
 
 void WebSocketHandler::HandleWebSocketMessage(SOCKET clientSocket, const std::string& message)
 {
-    bool isReloadCommand = false;
-    
-    if (message == "reload_level")
+    std::string level_name = "";
+    try
     {
-        isReloadCommand = true;
+        json jsonData = json::parse(message);
+        if (jsonData.contains("load_level") && jsonData["load_level"].is_string())
+        {
+            level_name = jsonData["load_level"].get<std::string>();
+        }
     }
-    else if (message.find("\"reload_level\"") != std::string::npos || 
-             message.find("'reload_level'") != std::string::npos)
-    {
-        isReloadCommand = true;
-    }
+    catch (const std::exception e) { }
     
-    if (isReloadCommand)
+    if (level_name != "")
     {
         if (GAME_LEVEL_MANAGER::m_instance != nullptr)
         {
+            //TODO: currently just reloading active level (which will fail for custom added levels!!) - need to request by string
             int currentLevel = GAME_LEVEL_MANAGER::get_current_level(GAME_LEVEL_MANAGER::m_instance);
             if (currentLevel != 0)
             {
                 GAME_LEVEL_MANAGER::queue_level(GAME_LEVEL_MANAGER::m_instance, currentLevel);
                 GAME_LEVEL_MANAGER::request_next_level(GAME_LEVEL_MANAGER::m_instance, false);
                 
-                // Send confirmation
-                std::string response = "{\"status\":\"success\",\"message\":\"Level reloaded\"}";
-                SendWebSocketFrame(clientSocket, response);
-            }
-            else
-            {
-                std::string response = "{\"status\":\"error\",\"message\":\"No current level\"}";
-                SendWebSocketFrame(clientSocket, response);
+                json response;
+                response["status"] = "success";
+                response["message"] = "Level loaded";
+                SendWebSocketFrame(clientSocket, response.dump());
             }
         }
-        else
-        {
-            std::string response = "{\"status\":\"error\",\"message\":\"Game not initialized\"}";
-            SendWebSocketFrame(clientSocket, response);
-        }
-    }
-    else
-    {
-        std::string response = "{\"status\":\"error\",\"message\":\"Unknown command\"}";
-        SendWebSocketFrame(clientSocket, response);
     }
 }
 
