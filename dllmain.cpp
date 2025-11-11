@@ -1,6 +1,7 @@
 #include "DevTools.h"
 
 #include "Menu.h"
+#include "WebSocketHandler.h"
 
 // Game-specific code classes.
 #include "GAME_LEVEL_MANAGER.h"
@@ -198,9 +199,13 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
                 break;
             }
         }
+
+        WebSocketHandler::Initialize(8765);
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH)
     {
+        WebSocketHandler::Shutdown();
+
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 

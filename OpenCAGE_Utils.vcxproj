@@ -77,6 +77,7 @@
     <ClCompile Include="libs\imgui\imgui_tables.cpp" />
     <ClCompile Include="libs\imgui\imgui_widgets.cpp" />
     <ClCompile Include="Menu.cpp" />
+    <ClCompile Include="WebSocketHandler.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DevTools.h" />
@@ -93,6 +94,7 @@
     <ClInclude Include="libs\imgui\imstb_textedit.h" />
     <ClInclude Include="libs\imgui\imstb_truetype.h" />
     <ClInclude Include="Menu.h" />
+    <ClInclude Include="WebSocketHandler.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="cpp.hint" />
