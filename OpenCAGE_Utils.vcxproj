@@ -60,7 +60,6 @@
   <ItemGroup>
     <ClCompile Include="DevTools.cpp" />
     <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="GameFlow.cpp" />
     <ClCompile Include="GAME_LEVEL_MANAGER.cpp" />
     <ClCompile Include="libs\detours\src\creatwth.cpp" />
     <ClCompile Include="libs\detours\src\detours.cpp" />
@@ -81,7 +80,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="DevTools.h" />
-    <ClInclude Include="GameFlow.h" />
     <ClInclude Include="GAME_LEVEL_MANAGER.h" />
     <ClInclude Include="libs\detours\src\detours.h" />
     <ClInclude Include="libs\detours\src\detver.h" />

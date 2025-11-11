@@ -87,9 +87,6 @@
     <ClCompile Include="GAME_LEVEL_MANAGER.cpp">
       <Filter>Source Files\Game</Filter>
     </ClCompile>
-    <ClCompile Include="GameFlow.cpp">
-      <Filter>Source Files\Game</Filter>
-    </ClCompile>
     <ClCompile Include="DevTools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -134,9 +131,6 @@
     <ClInclude Include="GAME_LEVEL_MANAGER.h">
       <Filter>Header Files\Game</Filter>
     </ClInclude>
-    <ClInclude Include="GameFlow.h">
-      <Filter>Header Files\Game</Filter>
-    </ClInclude>
     <ClInclude Include="DevTools.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -144,6 +138,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="WebSocketHandler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libs\json.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -198,18 +198,14 @@ void WebSocketHandler::HandleWebSocketMessage(SOCKET clientSocket, const std::st
     {
         if (GAME_LEVEL_MANAGER::m_instance != nullptr)
         {
-            //TODO: currently just reloading active level (which will fail for custom added levels!!) - need to request by string
-            int currentLevel = GAME_LEVEL_MANAGER::get_current_level(GAME_LEVEL_MANAGER::m_instance);
-            if (currentLevel != 0)
-            {
-                GAME_LEVEL_MANAGER::queue_level(GAME_LEVEL_MANAGER::m_instance, currentLevel);
-                GAME_LEVEL_MANAGER::request_next_level(GAME_LEVEL_MANAGER::m_instance, false);
-                
-                json response;
-                response["status"] = "success";
-                response["message"] = "Level loaded";
-                SendWebSocketFrame(clientSocket, response.dump());
-            }
+            int level = GAME_LEVEL_MANAGER::get_level_or_make_new(GAME_LEVEL_MANAGER::m_instance, level_name.c_str());
+            GAME_LEVEL_MANAGER::queue_level(GAME_LEVEL_MANAGER::m_instance, level);
+            GAME_LEVEL_MANAGER::request_next_level(GAME_LEVEL_MANAGER::m_instance, true);
+
+            json response;
+            response["status"] = "success";
+            response["message"] = "Level loaded";
+            SendWebSocketFrame(clientSocket, response.dump());
         }
     }
 }

@@ -3,15 +3,11 @@
 #include "Menu.h"
 #include "WebSocketHandler.h"
 
-// Game-specific code classes.
 #include "GAME_LEVEL_MANAGER.h"
-#include "GameFlow.h"
 
-// External includes.
 #include <detours.h>
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-
 
 typedef HRESULT(WINAPI* tD3D11CreateDeviceAndSwapChain)(
     void* pAdapter,
@@ -166,13 +162,10 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
             MessageBox(NULL, L"Fatal Error - GetModuleHandle(\"d3d11\") failed: MODULE_NOT_FOUND!", L"AlienIsolation.DevTools", MB_ICONERROR);
         }
 
-        // Attach the GAME_LEVEL_MANAGER hooks.
         DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
         DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
         DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
-
-        // Attach the GameFlow hooks.
-        DEVTOOLS_DETOURS_ATTACH(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
+        DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::get_level_or_make_new, GAME_LEVEL_MANAGER::h_get_level_or_make_new);
 
         const long result = DetourTransactionCommit();
         if (result != NO_ERROR)
@@ -209,17 +202,13 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 
-    	// Detach the rendering hooks.
         DEVTOOLS_DETOURS_DETACH(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
         DEVTOOLS_DETOURS_DETACH(d3d11Present, hD3D11Present);
 
-        // Detach the GAME_LEVEL_MANAGER hooks.
         DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
         DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
         DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
-
-        // Detach the GameFlow hooks.
-        DEVTOOLS_DETOURS_DETACH(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
+        DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::get_level_or_make_new, GAME_LEVEL_MANAGER::h_get_level_or_make_new);
         
         DetourTransactionCommit();
     }
