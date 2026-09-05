@@ -1,4 +1,5 @@
 #include "DEBUG_TEXT.h"
+#include "DEBUG_MARKER.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -182,33 +183,13 @@ namespace
 	}
 }
 
-bool DEBUG_TEXT::EnableEntities()
+bool DEBUG_TEXT::EnableEntities(bool text, bool stacking)
 {
-	const uintptr_t stub = DEVTOOLS_RELATIVE_ADDRESS(0x00599180); 
-	const uintptr_t real = DEVTOOLS_RELATIVE_ADDRESS(0x004c3010); 
-
-	const uintptr_t slots[] = {
-		DEVTOOLS_RELATIVE_ADDRESS(0x00e57768), 
-		DEVTOOLS_RELATIVE_ADDRESS(0x00e57280),
-	};
-
 	bool ok = true;
-	for (const uintptr_t slot : slots)
-	{
-		uintptr_t* entry = reinterpret_cast<uintptr_t*>(slot);
-		if (*entry == real)
-			continue;
-		if (*entry != stub)
-		{
-			ok = false;
-			continue;
-		}
-
-		DWORD oldProtect;
-		VirtualProtect(entry, sizeof(*entry), PAGE_READWRITE, &oldProtect);
-		*entry = real;
-		VirtualProtect(entry, sizeof(*entry), oldProtect, &oldProtect);
-	}
+	if (text)
+		ok = DevTools::EnableEntity(0x00e57768) && ok;
+	if (stacking)
+		ok = DevTools::EnableEntity(0x00e57280) && ok;
 	return ok;
 }
 
@@ -222,6 +203,7 @@ __declspec(noinline)
 void __fastcall DEBUG_TEXT::h_level_close(void* _this, void* /*_EDX*/)
 {
 	ClearAll();
+	DEBUG_MARKER::ClearAll();
 	level_close(_this);
 }
 

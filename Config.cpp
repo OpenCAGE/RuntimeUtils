@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -36,7 +37,7 @@ namespace
 				return key.virtualKey;
 
 		if (value.size() == 1 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= '0' && value[0] <= '9')))
-			return value[0]; // Virtual-key codes for letters and digits match their ASCII values.
+			return value[0];
 
 		char* end = nullptr;
 		const long code = strtol(value.c_str(), &end, 0);
@@ -48,7 +49,6 @@ namespace
 
 	std::string IniPath()
 	{
-		// Next to the game executable, which is also where the launcher drops the ASI.
 		char exePath[MAX_PATH] = {};
 		GetModuleFileNameA(nullptr, exePath, MAX_PATH);
 		std::string path = exePath;
@@ -63,8 +63,12 @@ namespace
 		const std::string ini = IniPath();
 		const char* section = "RuntimeUtils";
 
-		settings.hotReload = GetPrivateProfileIntA(section, "HotReload", settings.hotReload ? 1 : 0, ini.c_str()) != 0;
-		settings.debugText = GetPrivateProfileIntA(section, "DebugText", settings.debugText ? 1 : 0, ini.c_str()) != 0;
+		auto flag = [&](const char* name, bool fallback) { return GetPrivateProfileIntA(section, name, fallback ? 1 : 0, ini.c_str()) != 0; };
+		settings.hotReload = flag("HotReload", settings.hotReload);
+		settings.debugText = flag("DebugText", settings.debugText);
+		settings.debugTextStacking = flag("DebugTextStacking", settings.debugTextStacking);
+		settings.debugEnvironmentMarker = flag("DebugEnvironmentMarker", settings.debugEnvironmentMarker);
+		settings.debugPositionMarker = flag("DebugPositionMarker", settings.debugPositionMarker);
 
 		char key[64] = {};
 		GetPrivateProfileStringA(section, "HotReloadKey", "", key, sizeof(key), ini.c_str());
@@ -78,6 +82,12 @@ const Config::Settings& Config::Get()
 {
 	static const Settings settings = Load();
 	return settings;
+}
+
+bool Config::AnyDebug()
+{
+	const Settings& settings = Get();
+	return settings.debugText || settings.debugTextStacking || settings.debugEnvironmentMarker || settings.debugPositionMarker;
 }
 
 const char* Config::KeyName(int virtualKey)

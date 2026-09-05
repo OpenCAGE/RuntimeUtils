@@ -42,14 +42,12 @@ namespace DEBUG_TEXT
 	inline auto start_updating = reinterpret_cast<t_start_updating>(DEVTOOLS_RELATIVE_ADDRESS(0x00539dc0));
 	constexpr int kEntityStateOffset = -0x10;
 
-	// CATHODE::DEBUG_TEXT
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, on_start, h_on_start, t_on_start, 0x001a7250, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, on_update, h_on_update, t_on_update, 0x001a7150, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, on_stop, h_on_stop, t_on_stop, 0x001a72e0, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, on_clear_all, h_on_clear_all, t_on_clear_all, 0x001a7370, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, on_clear_of_alignment, h_on_clear_of_alignment, t_on_clear_of_alignment, 0x001a73a0, const void* entity, const void* trigger)
 
-	// CATHODE::DEBUG_TEXT_STACKING
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, stacking_on_start, h_stacking_on_start, t_stacking_on_start, 0x001a6e40, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, stacking_on_clear_all, h_stacking_on_clear_all, t_stacking_on_clear_all, 0x001a6f00, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, stacking_on_clear_last, h_stacking_on_clear_last, t_stacking_on_clear_last, 0x001a6f30, const void* entity, const void* trigger)
@@ -59,7 +57,7 @@ namespace DEBUG_TEXT
 	DEVTOOLS_DECLARE_CLASS_HOOK(void, destructor, h_destructor, t_destructor, 0x001a74b0)
 	DEVTOOLS_DECLARE_CLASS_HOOK(void, stacking_destructor, h_stacking_destructor, t_stacking_destructor, 0x001a6f60)
 
-	bool EnableEntities();
+	bool EnableEntities(bool text, bool stacking);
 	void ClearAll();
 	void DrawOverlay();
 }

@@ -5,7 +5,7 @@ A fork of [RyanJGray's DevTools](https://github.com/RyanJGray/AlienIsolation.Dev
 ## Features
 
 - **Hot reload** - press a key (INSERT by default) to restart the current level.
-- **Debug text** - makes the `DebugText` and `DebugTextStacking` script entities work. Retail builds of the game disable these entities and strip the code that draws them, so the ASI re-enables them in memory and draws their text itself: `text` followed by any linked or non-default inputs in brackets, positioned by `alignment`, styled by `size` and `colour`, hidden after `duration` seconds (or kept until `stop` when the duration is -1, live-updating its inputs). Stacking text is a block on the middle left, newest at the bottom, five entries deep. Everything clears on level change.
+- **Debug text** - makes the `DebugText` and `DebugTextStacking` script entities work. Retail builds of the game disable these entities and strip the code that draws them, so the ASI re-enables them in memory and draws their text itself: `text` followed by any linked or non-default inputs in brackets, positioned by `alignment`, styled by `size` and `colour`, hidden after `duration` seconds (or kept until `stop` when the duration is -1, live-updating its inputs). Stacking text is a block on the middle left, newest at the bottom, five entries deep. Everything clears on level change. `DebugPositionMarker` draws XYZ axes at its `world_pos` while started, and `DebugEnvironmentMarker` draws its `text` there in its `colour` and `size`.
 
 ## Configuration
 
@@ -16,7 +16,10 @@ Settings are read from `OpenCAGE_Utils.ini` next to `AI.exe`. The file is option
 HotReload=1          ; 1/0 - reload the current level on a key press
 HotReloadKey=INSERT  ; a key name (INSERT, DELETE, HOME, END, PAGEUP, PAGEDOWN, F1..F12, A..Z, 0..9)
                      ; or a Windows virtual-key code, decimal or hex (e.g. 0x2D)
-DebugText=1          ; 1/0 - draw DebugText / DebugTextStacking script entities on screen
+DebugText=1                 ; 1/0 - DebugText entities draw their text on screen
+DebugTextStacking=1         ; 1/0 - DebugTextStacking entities draw their text on screen
+DebugEnvironmentMarker=1    ; 1/0 - DebugEnvironmentMarker entities draw their text at a world position
+DebugPositionMarker=1       ; 1/0 - DebugPositionMarker entities draw axes at a world position
 ```
 
 ## Building

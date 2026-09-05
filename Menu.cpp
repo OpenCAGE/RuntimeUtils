@@ -3,6 +3,7 @@
 // Game-specific code classes.
 #include "GAME_LEVEL_MANAGER.h"
 #include "DEBUG_TEXT.h"
+#include "DEBUG_MARKER.h"
 #include "Config.h"
 
 // Engine-specific code classes.
@@ -147,8 +148,11 @@ void Menu::DrawMenu() {
     ImGui::NewFrame();
 
     // On-screen text from DebugText script entities.
-    if (Config::Get().debugText)
+    if (Config::AnyDebug())
+    {
         DEBUG_TEXT::DrawOverlay();
+        DEBUG_MARKER::DrawOverlay();
+    }
 
     if (g_showMenu) 
     {

@@ -7,6 +7,7 @@
 #include "GAME_LEVEL_MANAGER.h"
 #include "GameFlow.h"
 #include "DEBUG_TEXT.h"
+#include "DEBUG_MARKER.h"
 
 // External includes.
 #include <detours.h>
@@ -143,7 +144,7 @@ static void AttachHooks(bool attach)
     };
 
     // Rendering hooks: needed for the hot reload key (window procedure) and the debug text overlay.
-    if ((config.hotReload || config.debugText) && d3d11CreateDeviceAndSwapChain)
+    if ((config.hotReload || Config::AnyDebug()) && d3d11CreateDeviceAndSwapChain)
     {
         hook(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
         if (!attach && d3d11Present)
@@ -162,20 +163,32 @@ static void AttachHooks(bool attach)
     hook(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
 
     // DEBUG_TEXT / DEBUG_TEXT_STACKING hooks.
+    if (Config::AnyDebug())
+        hook(DEBUG_TEXT::level_close, DEBUG_TEXT::h_level_close);
+
     if (config.debugText)
     {
-        hook(DEBUG_TEXT::level_close, DEBUG_TEXT::h_level_close);
         hook(DEBUG_TEXT::destructor, DEBUG_TEXT::h_destructor);
-        hook(DEBUG_TEXT::stacking_destructor, DEBUG_TEXT::h_stacking_destructor);
         hook(DEBUG_TEXT::on_start, DEBUG_TEXT::h_on_start);
         hook(DEBUG_TEXT::on_update, DEBUG_TEXT::h_on_update);
         hook(DEBUG_TEXT::on_clear_of_alignment, DEBUG_TEXT::h_on_clear_of_alignment);
         hook(DEBUG_TEXT::on_stop, DEBUG_TEXT::h_on_stop);
         hook(DEBUG_TEXT::on_clear_all, DEBUG_TEXT::h_on_clear_all);
+    }
+
+    if (config.debugTextStacking)
+    {
+        hook(DEBUG_TEXT::stacking_destructor, DEBUG_TEXT::h_stacking_destructor);
         hook(DEBUG_TEXT::stacking_on_start, DEBUG_TEXT::h_stacking_on_start);
         hook(DEBUG_TEXT::stacking_on_clear_all, DEBUG_TEXT::h_stacking_on_clear_all);
         hook(DEBUG_TEXT::stacking_on_clear_last, DEBUG_TEXT::h_stacking_on_clear_last);
     }
+
+    if (config.debugEnvironmentMarker)
+        hook(DEBUG_MARKER::environment_on_update, DEBUG_MARKER::h_environment_on_update);
+
+    if (config.debugPositionMarker)
+        hook(DEBUG_MARKER::position_on_update, DEBUG_MARKER::h_position_on_update);
 }
 
 BOOL APIENTRY DllMain( HMODULE /*hModule*/,
@@ -193,9 +206,9 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         const Config::Settings& config = Config::Get();
 
         // Re-enable the DebugText / DebugTextStacking script entities, which retail builds disable.
-        if (config.debugText)
+        if (Config::AnyDebug())
         {
-            if (!DEBUG_TEXT::EnableEntities())
+            if (!DEBUG_TEXT::EnableEntities(config.debugText, config.debugTextStacking) || !DEBUG_MARKER::EnableEntities(config.debugEnvironmentMarker))
             {
                 MessageBox(NULL, L"Warning - could not enable the DebugText entities: unexpected AI.exe build?", L"AlienIsolation.DevTools", MB_ICONWARNING);
             }
@@ -206,7 +219,7 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         DetourUpdateThread(GetCurrentThread());
 
     	// Menu hooks / initialisation code, adapted from Alias Isolation.
-        if (config.hotReload || config.debugText)
+        if (config.hotReload || Config::AnyDebug())
         {
             const HMODULE hModule = GetModuleHandle(L"d3d11");
 
