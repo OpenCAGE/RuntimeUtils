@@ -54,6 +54,8 @@ namespace DEBUG_TEXT
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, stacking_on_clear_all, h_stacking_on_clear_all, t_stacking_on_clear_all, 0x001a6f00, const void* entity, const void* trigger)
 	DEVTOOLS_DECLARE_CLASS_HOOK(bool, stacking_on_clear_last, h_stacking_on_clear_last, t_stacking_on_clear_last, 0x001a6f30, const void* entity, const void* trigger)
 
+	DEVTOOLS_DECLARE_CLASS_HOOK(void, level_close, h_level_close, t_level_close, 0x003d9810)
+
 	DEVTOOLS_DECLARE_CLASS_HOOK(void, destructor, h_destructor, t_destructor, 0x001a74b0)
 	DEVTOOLS_DECLARE_CLASS_HOOK(void, stacking_destructor, h_stacking_destructor, t_stacking_destructor, 0x001a6f60)
 

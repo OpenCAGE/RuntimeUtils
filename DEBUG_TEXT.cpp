@@ -219,6 +219,13 @@ void DEBUG_TEXT::ClearAll()
 }
 
 __declspec(noinline)
+void __fastcall DEBUG_TEXT::h_level_close(void* _this, void* /*_EDX*/)
+{
+	ClearAll();
+	level_close(_this);
+}
+
+__declspec(noinline)
 void __fastcall DEBUG_TEXT::h_destructor(void* _this, void* /*_EDX*/)
 {
 	RemoveEntry(_this);
@@ -393,7 +400,12 @@ void DEBUG_TEXT::DrawOverlay()
 		cellOffset[cell] += textSize.y + lineGap;
 	}
 
-	float stackY = margin + cellOffset[0] + (cellOffset[0] > 0.0f ? margin : 0.0f);
+	float stackHeight = 0.0f;
+	for (const TextEntry& entry : g_entries)
+		if (entry.stacking)
+			stackHeight += font->CalcTextSizeA(entry.size, FLT_MAX, 0.0f, entry.text.c_str()).y + lineGap;
+
+	float stackY = (screen.y - stackHeight) * 0.5f + cellOffset[3];
 	for (const TextEntry& entry : g_entries)
 	{
 		if (!entry.stacking)

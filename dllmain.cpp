@@ -164,6 +164,7 @@ static void AttachHooks(bool attach)
     // DEBUG_TEXT / DEBUG_TEXT_STACKING hooks.
     if (config.debugText)
     {
+        hook(DEBUG_TEXT::level_close, DEBUG_TEXT::h_level_close);
         hook(DEBUG_TEXT::destructor, DEBUG_TEXT::h_destructor);
         hook(DEBUG_TEXT::stacking_destructor, DEBUG_TEXT::h_stacking_destructor);
         hook(DEBUG_TEXT::on_start, DEBUG_TEXT::h_on_start);
