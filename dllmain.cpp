@@ -1,10 +1,12 @@
 #include "DevTools.h"
 
+#include "Config.h"
 #include "Menu.h"
 
 // Game-specific code classes.
 #include "GAME_LEVEL_MANAGER.h"
 #include "GameFlow.h"
+#include "DEBUG_TEXT.h"
 
 // External includes.
 #include <detours.h>
@@ -48,16 +50,16 @@ void hookFunctionCall(int offset, void* replacementFunction)
 
 	// Change the memory page protection.
 	VirtualProtect(patchLocation, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect);
-	//to fill out the last 4 bytes of instruction, we need the offset between 
+	//to fill out the last 4 bytes of instruction, we need the offset between
 	//the payload function and the instruction immediately AFTER the call instruction
-    
+
 	//32 bit relative call opcode is E8, takes 1 32 bit operand for call offset
     uint8_t instruction[patchSize] = {0xE8, 0x0, 0x0, 0x0, 0x0};
 	const uint32_t relativeAddress = reinterpret_cast<uint32_t>(replacementFunction) - (reinterpret_cast<uint32_t>(patchLocation) + sizeof(instruction));
 
 	// Copy the remaining bytes of the instruction (after the opcode).
 	memcpy_s(instruction + 1, patchSize - 1, &relativeAddress, patchSize - 1);
-	
+
 	// Install the hook.
 	memcpy_s(patchLocation, patchSize, instruction, sizeof(instruction));
 
@@ -103,7 +105,7 @@ HRESULT WINAPI hD3D11CreateDeviceAndSwapChain(
         pFeatureLevel,
         ppImmediateContext
     );
-	
+
     // If the Menu class hasn't already been initialised, initialise it now.
     if (!Menu::IsInitialised())
     {
@@ -115,7 +117,7 @@ HRESULT WINAPI hD3D11CreateDeviceAndSwapChain(
             DetourUpdateThread(GetCurrentThread());
 
             void** pVMTPresent = *reinterpret_cast<void***>(*ppSwapChain);
-        	
+
         	// Store reference to the original D3D11Present function from the SwapChain VTable.
             d3d11Present = static_cast<tD3D11Present>(pVMTPresent[8]);
 
@@ -124,8 +126,55 @@ HRESULT WINAPI hD3D11CreateDeviceAndSwapChain(
             const auto result = DetourTransactionCommit();
 		}
     }
-	
+
     return res;
+}
+
+// Attaches or detaches every hook, according to which features are enabled in the config.
+// Detours rejects detaching something that was never attached, so both directions must agree.
+static void AttachHooks(bool attach)
+{
+    const Config::Settings& config = Config::Get();
+
+    auto hook = [attach](auto& original, auto detoured)
+    {
+        if (attach) DEVTOOLS_DETOURS_ATTACH(original, detoured);
+        else DEVTOOLS_DETOURS_DETACH(original, detoured);
+    };
+
+    // Rendering hooks: needed for the hot reload key (window procedure) and the debug text overlay.
+    if ((config.hotReload || config.debugText) && d3d11CreateDeviceAndSwapChain)
+    {
+        hook(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
+        if (!attach && d3d11Present)
+            hook(d3d11Present, hD3D11Present);
+    }
+
+    // GAME_LEVEL_MANAGER hooks: capture the level manager so the hot reload key can restart the current level.
+    if (config.hotReload)
+    {
+        hook(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
+        hook(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
+        hook(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
+    }
+
+    // GameFlow hooks.
+    hook(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
+
+    // DEBUG_TEXT / DEBUG_TEXT_STACKING hooks.
+    if (config.debugText)
+    {
+        hook(DEBUG_TEXT::destructor, DEBUG_TEXT::h_destructor);
+        hook(DEBUG_TEXT::stacking_destructor, DEBUG_TEXT::h_stacking_destructor);
+        hook(DEBUG_TEXT::on_start, DEBUG_TEXT::h_on_start);
+        hook(DEBUG_TEXT::on_update, DEBUG_TEXT::h_on_update);
+        hook(DEBUG_TEXT::on_clear_of_alignment, DEBUG_TEXT::h_on_clear_of_alignment);
+        hook(DEBUG_TEXT::on_stop, DEBUG_TEXT::h_on_stop);
+        hook(DEBUG_TEXT::on_clear_all, DEBUG_TEXT::h_on_clear_all);
+        hook(DEBUG_TEXT::stacking_on_start, DEBUG_TEXT::h_stacking_on_start);
+        hook(DEBUG_TEXT::stacking_on_clear_all, DEBUG_TEXT::h_stacking_on_clear_all);
+        hook(DEBUG_TEXT::stacking_on_clear_last, DEBUG_TEXT::h_stacking_on_clear_last);
+    }
 }
 
 BOOL APIENTRY DllMain( HMODULE /*hModule*/,
@@ -140,38 +189,42 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
 
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
     {
+        const Config::Settings& config = Config::Get();
+
+        // Re-enable the DebugText / DebugTextStacking script entities, which retail builds disable.
+        if (config.debugText)
+        {
+            if (!DEBUG_TEXT::EnableEntities())
+            {
+                MessageBox(NULL, L"Warning - could not enable the DebugText entities: unexpected AI.exe build?", L"AlienIsolation.DevTools", MB_ICONWARNING);
+            }
+        }
+
         DetourRestoreAfterWith();
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 
     	// Menu hooks / initialisation code, adapted from Alias Isolation.
-        const HMODULE hModule = GetModuleHandle(L"d3d11");
-    	
-        if (hModule)
+        if (config.hotReload || config.debugText)
         {
-            d3d11CreateDeviceAndSwapChain = reinterpret_cast<tD3D11CreateDeviceAndSwapChain>(GetProcAddress(hModule, "D3D11CreateDeviceAndSwapChain"));
-        	
-            if (d3d11CreateDeviceAndSwapChain)
+            const HMODULE hModule = GetModuleHandle(L"d3d11");
+
+            if (hModule)
             {
-                DEVTOOLS_DETOURS_ATTACH(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
+                d3d11CreateDeviceAndSwapChain = reinterpret_cast<tD3D11CreateDeviceAndSwapChain>(GetProcAddress(hModule, "D3D11CreateDeviceAndSwapChain"));
+
+                if (!d3d11CreateDeviceAndSwapChain)
+                {
+                    MessageBox(NULL, L"Fatal Error - GetProcAddress(\"D3D11CreateDeviceAndSwapChain\") failed!", L"AlienIsolation.DevTools", MB_ICONERROR);
+                }
             }
             else
             {
-                MessageBox(NULL, L"Fatal Error - GetProcAddress(\"D3D11CreateDeviceAndSwapChain\") failed!", L"AlienIsolation.DevTools", MB_ICONERROR);
+                MessageBox(NULL, L"Fatal Error - GetModuleHandle(\"d3d11\") failed: MODULE_NOT_FOUND!", L"AlienIsolation.DevTools", MB_ICONERROR);
             }
         }
-        else
-        {
-            MessageBox(NULL, L"Fatal Error - GetModuleHandle(\"d3d11\") failed: MODULE_NOT_FOUND!", L"AlienIsolation.DevTools", MB_ICONERROR);
-        }
 
-        // Attach the GAME_LEVEL_MANAGER hooks.
-        DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
-        DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
-        DEVTOOLS_DETOURS_ATTACH(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
-
-        // Attach the GameFlow hooks.
-        DEVTOOLS_DETOURS_ATTACH(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
+        AttachHooks(true);
 
         const long result = DetourTransactionCommit();
         if (result != NO_ERROR)
@@ -204,20 +257,10 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 
-    	// Detach the rendering hooks.
-        DEVTOOLS_DETOURS_DETACH(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
-        DEVTOOLS_DETOURS_DETACH(d3d11Present, hD3D11Present);
+        AttachHooks(false);
 
-        // Detach the GAME_LEVEL_MANAGER hooks.
-        DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
-        DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
-        DEVTOOLS_DETOURS_DETACH(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
-
-        // Detach the GameFlow hooks.
-        DEVTOOLS_DETOURS_DETACH(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
-        
         DetourTransactionCommit();
     }
-	
+
     return TRUE;
 }

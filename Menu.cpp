@@ -2,6 +2,8 @@
 
 // Game-specific code classes.
 #include "GAME_LEVEL_MANAGER.h"
+#include "DEBUG_TEXT.h"
+#include "Config.h"
 
 // Engine-specific code classes.
 
@@ -51,7 +53,9 @@ LRESULT CALLBACK Menu::WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         if (wParam == VK_DELETE) {
             //g_showMenu = !g_showMenu;
         }
-        if (wParam == VK_INSERT) {
+        // Hot reload: restart the current level.
+        const Config::Settings& config = Config::Get();
+        if (config.hotReload && wParam == static_cast<WPARAM>(config.hotReloadKey) && GAME_LEVEL_MANAGER::m_instance != nullptr) {
             LoadLevel(GAME_LEVEL_MANAGER::get_current_level(GAME_LEVEL_MANAGER::m_instance));
         }
     }
@@ -141,6 +145,11 @@ void Menu::DrawMenu() {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    // On-screen text from DebugText script entities.
+    if (Config::Get().debugText)
+        DEBUG_TEXT::DrawOverlay();
+
     if (g_showMenu) 
     {
         const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
