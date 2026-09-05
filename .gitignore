@@ -386,3 +386,7 @@ FodyWeavers.xsd
 # JetBrains Rider
 .idea/
 *.sln.iml
+
+# Import library and exports emitted alongside the ASI
+build/*.exp
+build/*.lib

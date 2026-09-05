@@ -8,6 +8,7 @@
 #include "GameFlow.h"
 #include "DEBUG_TEXT.h"
 #include "DEBUG_MARKER.h"
+#include "ZONE_LOADER.h"
 
 // External includes.
 #include <detours.h>
@@ -162,6 +163,9 @@ static void AttachHooks(bool attach)
     // GameFlow hooks.
     hook(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
 
+    // Zone streaming: always hooked, so Cinematic Tools can switch forced loading on and off while running.
+    hook(ZONE_LOADER::match_current_zones_to_povs, ZONE_LOADER::h_match_current_zones_to_povs);
+
     // DEBUG_TEXT / DEBUG_TEXT_STACKING hooks.
     if (Config::AnyDebug())
         hook(DEBUG_TEXT::level_close, DEBUG_TEXT::h_level_close);
@@ -204,6 +208,7 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
     {
         const Config::Settings& config = Config::Get();
+        ZONE_LOADER::SetForced(config.loadAllZones);
 
         // Re-enable the DebugText / DebugTextStacking script entities, which retail builds disable.
         if (Config::AnyDebug())

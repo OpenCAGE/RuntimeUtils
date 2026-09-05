@@ -12,6 +12,7 @@
 	  DebugTextStacking=1         ; 1/0 - DebugTextStacking script entities draw their text on screen
 	  DebugEnvironmentMarker=1    ; 1/0 - DebugEnvironmentMarker script entities draw their text at a world position
 	  DebugPositionMarker=1       ; 1/0 - DebugPositionMarker script entities draw axes at a world position
+	  LoadAllZones=0              ; 1/0 - stream every zone of the level in, instead of only those around the player
 */
 namespace Config
 {
@@ -23,6 +24,7 @@ namespace Config
 		bool debugTextStacking = true;
 		bool debugEnvironmentMarker = true;
 		bool debugPositionMarker = true;
+		bool loadAllZones = false;
 	};
 
 	// Loads the settings on first use.

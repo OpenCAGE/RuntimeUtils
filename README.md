@@ -7,6 +7,8 @@ A fork of [RyanJGray's DevTools](https://github.com/RyanJGray/AlienIsolation.Dev
 - **Hot reload** - press a key (INSERT by default) to restart the current level.
 - **Debug text** - makes the `DebugText` and `DebugTextStacking` script entities work. Retail builds of the game disable these entities and strip the code that draws them, so the ASI re-enables them in memory and draws their text itself: `text` followed by any linked or non-default inputs in brackets, positioned by `alignment`, styled by `size` and `colour`, hidden after `duration` seconds (or kept until `stop` when the duration is -1, live-updating its inputs). Stacking text is a block on the middle left, newest at the bottom, five entries deep. Everything clears on level change. `DebugPositionMarker` draws XYZ axes at its `world_pos` while started, and `DebugEnvironmentMarker` draws its `text` there in its `colour` and `size`.
 
+- **Zone loading** - the game only streams in the zones around the player and whatever the camera's view ray lands on, so a free camera (e.g. Cinematic Tools) can fly into areas that never load. With `LoadAllZones` on, every zone of the level is registered as viewed each frame and streams in. The ASI also exports `OpenCAGE_SetForceZoneLoading(bool)` so other injected tools can switch this on while their camera is active; Cinematic Tools does so.
+
 ## Configuration
 
 Settings are read from `OpenCAGE_Utils.ini` next to `AI.exe`. The file is optional; every key falls back to its default.
@@ -20,6 +22,7 @@ DebugText=1                 ; 1/0 - DebugText entities draw their text on screen
 DebugTextStacking=1         ; 1/0 - DebugTextStacking entities draw their text on screen
 DebugEnvironmentMarker=1    ; 1/0 - DebugEnvironmentMarker entities draw their text at a world position
 DebugPositionMarker=1       ; 1/0 - DebugPositionMarker entities draw axes at a world position
+LoadAllZones=0              ; 1/0 - stream every zone of the level in, not only those around the player
 ```
 
 ## Building

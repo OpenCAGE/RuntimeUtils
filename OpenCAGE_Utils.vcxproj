@@ -80,6 +80,7 @@
     <ClCompile Include="libs\imgui\imgui_tables.cpp" />
     <ClCompile Include="libs\imgui\imgui_widgets.cpp" />
     <ClCompile Include="Menu.cpp" />
+    <ClCompile Include="ZONE_LOADER.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Config.h" />
@@ -99,6 +100,7 @@
     <ClInclude Include="libs\imgui\imstb_textedit.h" />
     <ClInclude Include="libs\imgui\imstb_truetype.h" />
     <ClInclude Include="Menu.h" />
+    <ClInclude Include="ZONE_LOADER.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="cpp.hint" />

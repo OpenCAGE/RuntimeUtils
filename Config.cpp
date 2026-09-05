@@ -69,6 +69,7 @@ namespace
 		settings.debugTextStacking = flag("DebugTextStacking", settings.debugTextStacking);
 		settings.debugEnvironmentMarker = flag("DebugEnvironmentMarker", settings.debugEnvironmentMarker);
 		settings.debugPositionMarker = flag("DebugPositionMarker", settings.debugPositionMarker);
+		settings.loadAllZones = flag("LoadAllZones", settings.loadAllZones);
 
 		char key[64] = {};
 		GetPrivateProfileStringA(section, "HotReloadKey", "", key, sizeof(key), ini.c_str());
