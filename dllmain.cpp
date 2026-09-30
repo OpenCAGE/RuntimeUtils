@@ -9,6 +9,9 @@
 #include "DEBUG_TEXT.h"
 #include "DEBUG_MARKER.h"
 #include "ZONE_LOADER.h"
+#include "LIVE_LINK.h"
+#include "LIVE_LINK_SERVER.h"
+#include "LIVE_CAMERA.h"
 
 // External includes.
 #include <detours.h>
@@ -31,7 +34,7 @@ typedef HRESULT(WINAPI* tD3D11CreateDeviceAndSwapChain)(
     ID3D11DeviceContext** ppImmediateContext
 );
 
-// Menu - D3D11 CreateDeviceAndSwapChain hook.
+// The original D3D11 device and swap chain creation, hooked so the overlay can find the game's swap chain.
 tD3D11CreateDeviceAndSwapChain d3d11CreateDeviceAndSwapChain = nullptr;
 
 typedef HRESULT(WINAPI* tD3D11Present)(
@@ -40,7 +43,7 @@ typedef HRESULT(WINAPI* tD3D11Present)(
     UINT            Flags
 );
 
-// Menu - D3D11 Present hook.
+// The original D3D11 frame presentation, hooked so the overlay draws on every frame.
 tD3D11Present d3d11Present = nullptr;
 
 // This will work for now, but I need to write a replacement that will restore the original call bytes, we just overwrite them.
@@ -76,6 +79,10 @@ HRESULT WINAPI hD3D11Present(
 ) {
     Menu::DrawMenu();
 
+    // Live link screenshots and level loads, after the overlay so a screenshot shows it.
+    if (Config::Get().liveLink)
+        LIVE_LINK_SERVER::ProcessRenderRequests(swapChain);
+
     return d3d11Present(swapChain, SyncInterval, Flags);
 }
 
@@ -108,7 +115,7 @@ HRESULT WINAPI hD3D11CreateDeviceAndSwapChain(
         ppImmediateContext
     );
 
-    // If the Menu class hasn't already been initialised, initialise it now.
+    // If the overlay hasn't already been initialised, initialise it now.
     if (!Menu::IsInitialised())
     {
         Menu::InitMenu(*ppSwapChain);
@@ -120,7 +127,7 @@ HRESULT WINAPI hD3D11CreateDeviceAndSwapChain(
 
             void** pVMTPresent = *reinterpret_cast<void***>(*ppSwapChain);
 
-        	// Store reference to the original D3D11Present function from the SwapChain VTable.
+        	// Keep the original frame presentation, slot 8 of the swap chain's virtual table.
             d3d11Present = static_cast<tD3D11Present>(pVMTPresent[8]);
 
             DEVTOOLS_DETOURS_ATTACH(d3d11Present, hD3D11Present);
@@ -145,28 +152,39 @@ static void AttachHooks(bool attach)
     };
 
     // Rendering hooks: needed for the hot reload key (window procedure) and the debug text overlay.
-    if ((config.hotReload || Config::AnyDebug()) && d3d11CreateDeviceAndSwapChain)
+    if ((config.hotReload || Config::AnyDebug() || config.liveLink) && d3d11CreateDeviceAndSwapChain)
     {
         hook(d3d11CreateDeviceAndSwapChain, hD3D11CreateDeviceAndSwapChain);
         if (!attach && d3d11Present)
             hook(d3d11Present, hD3D11Present);
     }
 
-    // GAME_LEVEL_MANAGER hooks: capture the level manager so the hot reload key can restart the current level.
-    if (config.hotReload)
+    // Level manager hooks: capture the level manager so the hot reload key can restart the current level, and the
+    // live link can load a level (they only pass through otherwise).
+    if (config.hotReload || config.liveLink)
     {
         hook(GAME_LEVEL_MANAGER::get_level_from_name, GAME_LEVEL_MANAGER::h_get_level_from_name);
         hook(GAME_LEVEL_MANAGER::queue_level, GAME_LEVEL_MANAGER::h_queue_level);
         hook(GAME_LEVEL_MANAGER::request_next_level, GAME_LEVEL_MANAGER::h_request_next_level);
     }
 
-    // GameFlow hooks.
+    // Live link: requests on entities are carried out once a frame, on the entity thread.
+    if (config.liveLink)
+        hook(LIVE_LINK::process, LIVE_LINK::h_process);
+
+    // Live link camera sync: renders the game from OpenCAGE's viewport camera while OpenCAGE asks. Attached for the whole
+    // run and gated by the pose instead: Cinematic Tools hooks the same function later (MinHook), and the two chain.
+    if (config.liveLink && config.liveLinkCamera)
+        hook(LIVE_CAMERA::synchronize_with_engine, LIVE_CAMERA::h_synchronize_with_engine);
+
+    // A hook on the start of gameplay (it only passes through).
     hook(GameFlow::start_gameplay, GameFlow::h_start_gameplay);
 
-    // Zone streaming: always hooked, so Cinematic Tools can switch forced loading on and off while running.
+    // Zone streaming: always hooked, so Cinematic Tools (and the live link camera) can switch forced loading on and off
+    // while running.
     hook(ZONE_LOADER::match_current_zones_to_povs, ZONE_LOADER::h_match_current_zones_to_povs);
 
-    // DEBUG_TEXT / DEBUG_TEXT_STACKING hooks.
+    // DebugText / DebugTextStacking hooks. The level closing clears everything the debug entities drew, markers included.
     if (Config::AnyDebug())
         hook(DEBUG_TEXT::level_close, DEBUG_TEXT::h_level_close);
 
@@ -208,7 +226,7 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
     if (ul_reason_for_call == DLL_PROCESS_ATTACH)
     {
         const Config::Settings& config = Config::Get();
-        ZONE_LOADER::SetForced(config.loadAllZones);
+        ZONE_LOADER::SetForced(ZONE_LOADER::Source::Config, config.loadAllZones);
 
         // Re-enable the DebugText / DebugTextStacking script entities, which retail builds disable.
         if (Config::AnyDebug())
@@ -223,8 +241,8 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 
-    	// Menu hooks / initialisation code, adapted from Alias Isolation.
-        if (config.hotReload || Config::AnyDebug())
+    	// Overlay hooks / initialisation code, adapted from Alias Isolation.
+        if (config.hotReload || Config::AnyDebug() || config.liveLink)
         {
             const HMODULE hModule = GetModuleHandle(L"d3d11");
 
@@ -244,6 +262,9 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
         }
 
         AttachHooks(true);
+
+        if (config.liveLink)
+            LIVE_LINK_SERVER::Start(static_cast<uint16_t>(config.liveLinkPort));
 
         const long result = DetourTransactionCommit();
         if (result != NO_ERROR)
@@ -273,6 +294,9 @@ BOOL APIENTRY DllMain( HMODULE /*hModule*/,
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH)
     {
+        if (Config::Get().liveLink)
+            LIVE_LINK_SERVER::Stop();
+
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
 

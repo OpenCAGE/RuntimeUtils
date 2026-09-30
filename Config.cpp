@@ -70,6 +70,11 @@ namespace
 		settings.debugEnvironmentMarker = flag("DebugEnvironmentMarker", settings.debugEnvironmentMarker);
 		settings.debugPositionMarker = flag("DebugPositionMarker", settings.debugPositionMarker);
 		settings.loadAllZones = flag("LoadAllZones", settings.loadAllZones);
+		settings.liveLink = flag("LiveLink", settings.liveLink);
+		settings.liveLinkCamera = flag("LiveLinkCamera", settings.liveLinkCamera);
+		const int port = GetPrivateProfileIntA(section, "LiveLinkPort", settings.liveLinkPort, ini.c_str());
+		if (port > 0 && port < 65536)
+			settings.liveLinkPort = port;
 
 		char key[64] = {};
 		GetPrivateProfileStringA(section, "HotReloadKey", "", key, sizeof(key), ini.c_str());

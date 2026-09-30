@@ -96,6 +96,18 @@
     <ClCompile Include="Menu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="LIVE_LINK.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LIVE_LINK_SERVER.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="LIVE_CAMERA.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SCREENSHOT.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="libs\imgui\imconfig.h">
@@ -138,6 +150,18 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Menu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LIVE_LINK.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LIVE_LINK_SERVER.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="LIVE_CAMERA.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SCREENSHOT.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

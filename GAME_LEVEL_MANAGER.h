@@ -10,7 +10,7 @@ namespace GAME_LEVEL_MANAGER
 		unsigned int unk1;
 	};
 
-	// The global instance of GAME_LEVEL_MANAGER.
+	// The game's level manager, captured the first time it looks a level up by name.
 	inline Instance* m_instance = nullptr;
 
 	int __fastcall h_get_level_from_name(Instance* _this, void* _EDX, char* level_name);

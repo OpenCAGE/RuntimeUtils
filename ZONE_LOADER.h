@@ -21,6 +21,15 @@ namespace ZONE_LOADER
 	constexpr uintptr_t kZoneIdOffset = 0xc; 
 	constexpr unsigned int kPlayerViewer = 0;
 
-	void SetForced(bool forced);
+	// Who wants every zone streamed in. Each switches only its own request on and off, and loading is forced while any
+	// of them wants it - so Cinematic Tools turning its camera off does not cancel LoadAllZones or the live link camera.
+	enum class Source : uint32_t
+	{
+		Config = 1 << 0,     // LoadAllZones in OpenCAGE_Utils.ini
+		External = 1 << 1,   // other injected tools, through this DLL's exported zone loading switch (Cinematic Tools, while its camera is on)
+		LiveCamera = 1 << 2, // the live link camera sync, while the game renders from OpenCAGE's camera (LIVE_CAMERA.h)
+	};
+
+	void SetForced(Source source, bool forced);
 	bool IsForced();
 }

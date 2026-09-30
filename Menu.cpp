@@ -5,6 +5,8 @@
 #include "DEBUG_TEXT.h"
 #include "DEBUG_MARKER.h"
 #include "Config.h"
+#include "LIVE_LINK_SERVER.h"
+#include "LIVE_CAMERA.h"
 
 // Engine-specific code classes.
 
@@ -12,6 +14,7 @@
 #include <map>
 #include <sstream>
 #include <iomanip>
+#include <cfloat>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -31,7 +34,7 @@ Menu::Menu()
 	
 }
 
-// Destructor for the Menu class.
+// Forgets the overlay's swap chain, context, render target and window.
 Menu::~Menu() {
     g_swapChain = nullptr;
     g_context = nullptr;
@@ -52,7 +55,7 @@ LRESULT CALLBACK Menu::WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
     if (uMsg == WM_KEYUP) {
         if (wParam == VK_DELETE) {
-            //g_showMenu = !g_showMenu;
+            // the Delete key once toggled the settings window; it is off for now
         }
         // Hot reload: restart the current level.
         const Config::Settings& config = Config::Get();
@@ -99,7 +102,6 @@ void Menu::DrawMenu() {
 
         // Get the swapchain description (we use this to get the handle to the game's window).
         DXGI_SWAP_CHAIN_DESC dxgiSwapChainDesc;
-        //DX_CHECK(g_swapChain->GetDesc(&dxgiSwapChainDesc));
         if (FAILED(g_swapChain->GetDesc(&dxgiSwapChainDesc)))
         {
 	        DebugBreak();
@@ -114,10 +116,8 @@ void Menu::DrawMenu() {
 
         ImGui_ImplWin32_Init(g_hWindow);
         ImGui_ImplDX11_Init(g_device, g_context);
-        //io.ImeWindowHandle = g_hWindow;
 
         ID3D11Texture2D* pBackBuffer = nullptr;
-        //DX_CHECK(g_swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<LPVOID*>(&pBackBuffer)));
         if (FAILED(g_swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<LPVOID*>(&pBackBuffer))))
         {
             DebugBreak();
@@ -126,7 +126,6 @@ void Menu::DrawMenu() {
 
         // Ensure the back buffer is not 0 or null.
         if (pBackBuffer) {
-            //DX_CHECK(g_device->CreateRenderTargetView(pBackBuffer, NULL, &g_renderTargetView));
             if (FAILED(g_device->CreateRenderTargetView(pBackBuffer, nullptr, &g_renderTargetView)))
             {
                 DebugBreak();
@@ -152,6 +151,32 @@ void Menu::DrawMenu() {
     {
         DEBUG_TEXT::DrawOverlay();
         DEBUG_MARKER::DrawOverlay();
+    }
+
+    // Live link: a quiet note in the top right while OpenCAGE is connected, with what it last did for a few seconds.
+    if (Config::Get().liveLink && LIVE_LINK_SERVER::Connected())
+    {
+        ImDrawList* drawList = ImGui::GetForegroundDrawList();
+        const float width = ImGui::GetIO().DisplaySize.x;
+        const float size = 16.0f;
+        const char* label = "OpenCAGE Live Link";
+        const float labelWidth = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, label).x;
+        drawList->AddText(ImGui::GetFont(), size, ImVec2(width - labelWidth - 12.0f, 10.0f), IM_COL32(120, 220, 140, 220), label);
+        float line = 30.0f;
+        // Camera sync: for as long as the game renders from OpenCAGE's viewport camera.
+        if (LIVE_CAMERA::Applying())
+        {
+            const char* camera = "Camera: following OpenCAGE";
+            const float cameraWidth = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, camera).x;
+            drawList->AddText(ImGui::GetFont(), size, ImVec2(width - cameraWidth - 12.0f, line), IM_COL32(120, 220, 140, 220), camera);
+            line += 20.0f;
+        }
+        const std::string activity = LIVE_LINK_SERVER::LastActivity(4000);
+        if (!activity.empty())
+        {
+            const float activityWidth = ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, activity.c_str()).x;
+            drawList->AddText(ImGui::GetFont(), size, ImVec2(width - activityWidth - 12.0f, line), IM_COL32(230, 230, 230, 220), activity.c_str());
+        }
     }
 
     if (g_showMenu) 

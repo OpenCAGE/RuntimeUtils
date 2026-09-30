@@ -20,4 +20,7 @@ namespace DevTools
 	};
 
 	bool EnableEntity(uintptr_t slotOffset);
+
+	// Appends a timestamped line to OpenCAGE_Utils.log next to AI.exe (started afresh each run). Thread-safe.
+	void Log(const char* format, ...);
 }

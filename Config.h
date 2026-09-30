@@ -13,18 +13,24 @@
 	  DebugEnvironmentMarker=1    ; 1/0 - DebugEnvironmentMarker script entities draw their text at a world position
 	  DebugPositionMarker=1       ; 1/0 - DebugPositionMarker script entities draw axes at a world position
 	  LoadAllZones=0              ; 1/0 - stream every zone of the level in, instead of only those around the player
+	  LiveLink=1                  ; 1/0 - let OpenCAGE edit the running level's scripting and call entity methods
+	  LiveLinkPort=8765           ; the local port OpenCAGE connects to
+	  LiveLinkCamera=1            ; 1/0 - let OpenCAGE's viewport camera drive the game camera when it asks (camera sync)
 */
 namespace Config
 {
 	struct Settings
 	{
 		bool hotReload = true;
-		int hotReloadKey = 0x2D; // VK_INSERT
+		int hotReloadKey = 0x2D; // the Insert key
 		bool debugText = true;
 		bool debugTextStacking = true;
 		bool debugEnvironmentMarker = true;
 		bool debugPositionMarker = true;
 		bool loadAllZones = false;
+		bool liveLink = true;
+		int liveLinkPort = 8765;
+		bool liveLinkCamera = true;
 	};
 
 	// Loads the settings on first use.

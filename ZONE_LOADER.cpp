@@ -6,17 +6,21 @@
 
 namespace
 {
-	std::atomic<bool> g_forced = false;
+	// A bit per source that wants every zone in (set when the DLL loads, on the camera task and from other tools' threads)
+	std::atomic<uint32_t> g_sources = 0;
 }
 
-void ZONE_LOADER::SetForced(bool forced)
+void ZONE_LOADER::SetForced(Source source, bool forced)
 {
-	g_forced = forced;
+	if (forced)
+		g_sources |= static_cast<uint32_t>(source);
+	else
+		g_sources &= ~static_cast<uint32_t>(source);
 }
 
 bool ZONE_LOADER::IsForced()
 {
-	return g_forced;
+	return g_sources != 0;
 }
 
 __declspec(noinline)
@@ -24,7 +28,7 @@ void __cdecl ZONE_LOADER::h_match_current_zones_to_povs()
 {
 	match_current_zones_to_povs();
 
-	if (!g_forced)
+	if (!IsForced())
 		return;
 
 	char* zoneManager = static_cast<char*>(*zone_manager_instance);
@@ -51,8 +55,9 @@ void __cdecl ZONE_LOADER::h_match_current_zones_to_povs()
 	}
 }
 
-// For other tools injected into the game (Cinematic Tools toggles this with its free camera).
+// For other tools injected into the game (Cinematic Tools toggles this with its free camera). It only switches their
+// own request: LoadAllZones and the live link camera keep theirs.
 extern "C" __declspec(dllexport) void OpenCAGE_SetForceZoneLoading(bool forced)
 {
-	ZONE_LOADER::SetForced(forced);
+	ZONE_LOADER::SetForced(ZONE_LOADER::Source::External, forced);
 }

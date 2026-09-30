@@ -65,6 +65,12 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="GameFlow.cpp" />
     <ClCompile Include="GAME_LEVEL_MANAGER.cpp" />
+    <ClCompile Include="LIVE_CAMERA.cpp" />
+    <ClCompile Include="LIVE_LINK.cpp">
+      <!-- Faults inside game calls are caught (Guarded): /EHa runs the destructors that release what was held -->
+      <ExceptionHandling>Async</ExceptionHandling>
+    </ClCompile>
+    <ClCompile Include="LIVE_LINK_SERVER.cpp" />
     <ClCompile Include="libs\detours\src\creatwth.cpp" />
     <ClCompile Include="libs\detours\src\detours.cpp" />
     <ClCompile Include="libs\detours\src\disasm.cpp" />
@@ -80,6 +86,7 @@
     <ClCompile Include="libs\imgui\imgui_tables.cpp" />
     <ClCompile Include="libs\imgui\imgui_widgets.cpp" />
     <ClCompile Include="Menu.cpp" />
+    <ClCompile Include="SCREENSHOT.cpp" />
     <ClCompile Include="ZONE_LOADER.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -89,6 +96,9 @@
     <ClInclude Include="DevTools.h" />
     <ClInclude Include="GameFlow.h" />
     <ClInclude Include="GAME_LEVEL_MANAGER.h" />
+    <ClInclude Include="LIVE_CAMERA.h" />
+    <ClInclude Include="LIVE_LINK.h" />
+    <ClInclude Include="LIVE_LINK_SERVER.h" />
     <ClInclude Include="libs\detours\src\detours.h" />
     <ClInclude Include="libs\detours\src\detver.h" />
     <ClInclude Include="libs\imgui\backends\imgui_impl_dx11.h" />
@@ -100,6 +110,7 @@
     <ClInclude Include="libs\imgui\imstb_textedit.h" />
     <ClInclude Include="libs\imgui\imstb_truetype.h" />
     <ClInclude Include="Menu.h" />
+    <ClInclude Include="SCREENSHOT.h" />
     <ClInclude Include="ZONE_LOADER.h" />
   </ItemGroup>
   <ItemGroup>

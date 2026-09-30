@@ -225,6 +225,7 @@ __declspec(noinline)
 bool __fastcall DEBUG_TEXT::h_on_start(void* _this, void* /*_EDX*/, const void* entity, const void* trigger)
 {
 	const std::string text = ReadText(_this, entity, Guid(kDebugText.text)) + ReadInputs(_this, entity, kDebugText);
+	DevTools::Log("DebugText: %s", text.c_str());
 	const int alignment = get_alignment(_this, entity);
 	const int size = ReadSize(_this, entity, Guid(kDebugText.size));
 	const ImU32 colour = ReadColour(_this, entity, Guid(kDebugText.colour));
@@ -304,13 +305,14 @@ __declspec(noinline)
 bool __fastcall DEBUG_TEXT::h_stacking_on_start(void* _this, void* /*_EDX*/, const void* entity, const void* trigger)
 {
 	const std::string text = ReadText(_this, entity, Guid(kDebugTextStacking.text)) + ReadInputs(_this, entity, kDebugTextStacking);
+	DevTools::Log("DebugTextStacking: %s", text.c_str());
 	const int size = ReadSize(_this, entity, Guid(kDebugTextStacking.size));
 	const ImU32 colour = ReadColour(_this, entity, Guid(kDebugTextStacking.colour));
 
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
 		const ULONGLONG now = GetTickCount64();
-		g_entries.push_back({ _this, text, 3 /* LEFT */, static_cast<float>(size), colour, true, 0, now });
+		g_entries.push_back({ _this, text, 3 /* middle left */, static_cast<float>(size), colour, true, 0, now });
 
 		// Keep the stack to its last few entries, dropping the oldest.
 		size_t stacked = 0;
