@@ -546,7 +546,7 @@ namespace
 		request.payload.assign(message.begin() + 12, message.end());
 		if (magic != kMagic || version != kVersion)
 		{
-			Reply(request, false, "Unsupported live link protocol (OpenCAGE and the game's OpenCAGE_Utils.asi are different versions)");
+			Reply(request, false, "Unsupported Live Link protocol (OpenCAGE and the game's OpenCAGE_Utils.asi are different versions)");
 			return;
 		}
 		if (request.command == LIVE_LINK_SERVER::CAMERA)
