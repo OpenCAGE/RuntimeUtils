@@ -1,6 +1,7 @@
 #include "LIVE_LINK_SERVER.h"
 #include "LIVE_LINK.h"
 #include "LIVE_CAMERA.h"
+#include "LIVE_ANIMATION.h"
 #include "GAME_LEVEL_MANAGER.h"
 #include "SCREENSHOT.h"
 #include "DevTools.h"
@@ -432,6 +433,52 @@ namespace
 		Reply(request, result.ok, result.message);
 	}
 
+	// An animation drive is only stored here (the entity thread carries it out every frame, see LIVE_ANIMATION.h), so it is
+	// answered at once too: OpenCAGE sends a hold for every move of its playhead, and a release has to land whatever the
+	// game is doing.
+	void HandleAnimation(const Request& request)
+	{
+		Reader reader(request.payload);
+		LIVE_ANIMATION::Drive drive;
+		drive.connection = request.connection;
+		drive.root = reader.U32();
+		drive.mode = reader.U8();
+		uint32_t pathCount = 0;
+		// The rest is only there for a hold or play; an unknown mode, or a longer path, is refused without reading on
+		if (drive.mode == LIVE_ANIMATION::Hold || drive.mode == LIVE_ANIMATION::Play)
+		{
+			drive.composite = reader.U32();
+			drive.entity = reader.U32();
+			pathCount = reader.U32();
+			if (pathCount <= LIVE_ANIMATION::kMaxPath)
+			{
+				for (uint32_t i = 0; i < pathCount && !reader.failed; i++)
+					drive.path.push_back(reader.U32());
+				drive.time = reader.F32();
+				drive.rate = reader.F32();
+				drive.flags = reader.U8();
+				drive.sequence = reader.U32();
+			}
+		}
+		const LIVE_LINK::Result result = reader.failed ? LIVE_ANIMATION::Refuse("Malformed request") : LIVE_ANIMATION::SetDrive(drive, pathCount);
+		Reply(request, result.ok, result.message);
+	}
+
+	// What the entity thread did with the drive is read from its last snapshot, so this is answered at once as well: OpenCAGE
+	// asks for it every few frames while the game plays the animation, to follow it with its playhead.
+	void HandleAnimationGet(const Request& request)
+	{
+		Reader reader(request.payload);
+		const uint32_t root = reader.U32();
+		if (reader.failed)
+		{
+			Reply(request, false, "Malformed request");
+			return;
+		}
+		const LIVE_LINK::Result result = LIVE_ANIMATION::GetState(root);
+		Reply(request, result.ok, result.message);
+	}
+
 	void QueueBinaryMessage(const std::vector<uint8_t>& message)
 	{
 		Request request;
@@ -459,6 +506,16 @@ namespace
 		if (request.command == LIVE_LINK_SERVER::CAMERA_GET)
 		{
 			HandleCameraGet(request);
+			return;
+		}
+		if (request.command == LIVE_LINK_SERVER::ANIMATION)
+		{
+			HandleAnimation(request);
+			return;
+		}
+		if (request.command == LIVE_LINK_SERVER::ANIMATION_GET)
+		{
+			HandleAnimationGet(request);
 			return;
 		}
 

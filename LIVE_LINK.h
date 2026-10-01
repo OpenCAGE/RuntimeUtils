@@ -81,6 +81,11 @@ namespace LIVE_LINK
 	// before the check above lets edits through.
 	void TrackTransport();
 
+	// Called every entity frame, after the queued requests and before the game's own processing: holds or plays the
+	// CAGEAnimation OpenCAGE asked for (the live link's ANIMATION, stored by LIVE_ANIMATION), and gives it back. Returns at
+	// once while nothing is asked for or held.
+	void DriveAnimation();
+
 	// The game's level manager, from the game's globals (null before it exists).
 	void* LevelManager();
 

@@ -22,15 +22,19 @@ struct IDXGISwapChain;
 	socket thread never touches the game. CAMERA and CAMERA_GET are the exceptions: the socket thread only checks which
 	level is running (plain reads of the entity manager) and stores the pose, or reads the camera hook's last snapshot of
 	the game camera, answering at once - they are never queued behind edits held while a level starts - and the camera
-	hook applies the pose (see LIVE_CAMERA.cpp).
+	hook applies the pose (see LIVE_CAMERA.cpp). ANIMATION and ANIMATION_GET are answered at once the same way: the
+	request is stored, or the entity thread's last snapshot of what it did with it read, and the entity thread carries
+	it out every frame (see LIVE_ANIMATION.h).
 */
 namespace LIVE_LINK_SERVER
 {
 	enum Command : uint16_t
 	{
-		STATUS = 1,          // -> message "running=0|1\nroot=..\nroot_name=..\ntemplates=..\nstate=..\nplaying=0|1\nloading=0|1[\nloading_reason=..]\ncamera=x,y,z\ncamera_forward=..\ncamera_up=..\ncamera_sync=0|1"
+		STATUS = 1,          // -> message "running=0|1\nroot=..\nroot_name=..\ntemplates=..\nstate=..\nplaying=0|1\nloading=0|1[\nloading_reason=..]\ncamera=x,y,z\ncamera_forward=..\ncamera_up=..\ncamera_sync=0|1\nanimation=0|1"
 		                     //    (CALL_METHOD and APPLY_COMPOSITE are held while loading=1 - scripts paused, or running again for under 5 s:
-		                     //    level starting, pause menu - and turned away after 20 s; camera_sync=1 while the game renders from CAMERA's pose)
+		                     //    level starting, pause menu - and turned away after 20 s; camera_sync=1 while the game renders from CAMERA's pose;
+		                     //    animation=1 while the game has a CAGEAnimation taken for ANIMATION - held, played, or waiting to be given back
+		                     //    - as of the last frame)
 		CALL_METHOD = 2,     // u32 root (0: any), u32 composite, u32 entity, u32 method, u32 path count, u32 path[count] (instance entity ids from the root)
 		APPLY_COMPOSITE = 3, // u32 root (0: any), u32 composite, u32 image size, image, u32 relocation count, u32 relocations[count]
 		LOAD_LEVEL = 4,      // u32 length, level name (e.g. "PRODUCTION\\BSP_TORRENS" or "BSP_TORRENS")
@@ -45,6 +49,27 @@ namespace LIVE_LINK_SERVER
 		                     //    degrees, 4 decimals whatever the locale; frame is bumped by every frame the hook keeps. Refused with
 		                     //    no level running, another level running, LiveLinkCamera=0, or no frame of the running level drawn from a
 		                     //    camera in the last second ("The game has not drawn a frame from its camera yet": a level loading).
+		ANIMATION = 9,       // u32 root (0: any), u8 mode (0: give the animation back, 1: hold it at a time, 2: play it from a time), then only if
+		                     //    mode != 0: u32 composite, u32 entity (the CAGEAnimation), u32 path count (at most 64), u32 path[count] (instance
+		                     //    entity ids from the root; none: every running instance of the composite), f32 time (seconds), f32 rate (play:
+		                     //    times the game's own frame time, 1 = real time; hold: ignored), u8 flags (1: loop - play wraps to 0 rather
+		                     //    than stopping just short of the end; 2: events - play runs the event tracks its frames pass over, as the game's
+		                     //    own playback does; a hold never runs them), u32 sequence (OpenCAGE's count, given back by ANIMATION_GET once a
+		                     //    frame has applied the request; play starts again from its time only when the sequence changes).
+		                     //    -> message in ANIMATION_GET's form, as of the last frame (the request applies from the next one). Stored and
+		                     //    answered at once, never queued behind edits; carried out by the entity thread every frame while this connection
+		                     //    lasts. One animation per connection: one for another target gives the previous one back first; a disconnect
+		                     //    gives it back; another level starting drops it (its entities have gone) and it waits for its own level. A
+		                     //    release is always taken. Refused only when it cannot be read, for a mode above 2, a path longer than 64, or
+		                     //    while another level runs; while no level runs, or edits must wait, it is stored and ANIMATION_GET says it is
+		                     //    waiting, and why.
+		ANIMATION_GET = 10,  // u32 root (0: any) -> message "state=released|waiting|held|playing|ended|not_found|not_animation|disabled|no_data|cinematic
+		                     //    \nreason=..\ntime=s\nlength=s\nsequence=N\nframe=N\ninstances=applied/found\nwas_playing=0|1" - 4 decimals whatever
+		                     //    the locale; length is the game's own (the animation's length parameter: 10 when unset, clamped 0.01..10000);
+		                     //    sequence is the last request a frame applied - the one whose time the game shows (0 while nothing is taken),
+		                     //    so a newer request that waits leaves it as it was; frame is bumped by every entity frame that wrote it;
+		                     //    was_playing=1 if the game was advancing the animation when it was taken. Never refused (a malformed request
+		                     //    aside).
 	};
 
 	void Start(uint16_t port);
@@ -61,7 +86,7 @@ namespace LIVE_LINK_SERVER
 	std::string LastActivity(unsigned int withinMs);
 
 	// Which connection is current: bumped when OpenCAGE connects and when it goes, so something a request left behind
-	// (the camera pose) can tell its connection has ended.
+	// (the camera pose, the animation drive) can tell its connection has ended.
 	uint32_t CurrentConnection();
 
 	// Sets the overlay's activity line (for things done outside the server, e.g. the camera hook).

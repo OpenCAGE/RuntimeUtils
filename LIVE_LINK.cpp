@@ -1,6 +1,7 @@
 #include "LIVE_LINK.h"
 #include "LIVE_LINK_SERVER.h"
 #include "LIVE_CAMERA.h"
+#include "LIVE_ANIMATION.h"
 #include "DEBUG_MARKER.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -653,6 +655,42 @@ namespace
 		return found;
 	}
 
+	// The instances a request names: the one at the path of composite-instance entity ids from the root (checked to be an
+	// instance of the composite), or every running instance of the composite when the path is empty. False, with why, when
+	// they cannot be found.
+	bool FindInstances(uint32_t compositeGuid, const std::vector<uint32_t>& path, std::vector<Allocation*>& instances, std::string& error)
+	{
+		if (!path.empty())
+		{
+			Allocation* instance = *reinterpret_cast<Allocation**>(EntityManager() + kManagerRoot);
+			for (uint32_t step : path)
+			{
+				instance = instance ? FindChild(instance, step) : nullptr;
+				if (!instance || !IsCompositeInstance(instance))
+				{
+					error = "The instance path does not resolve in the running level (at " + Hex(step) + ")";
+					return false;
+				}
+			}
+			if (instance && FindTemplate(compositeGuid) && *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(Object(instance)) + kInstanceTemplate) != 0 &&
+				Packed<CompositeTemplate>(*reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(Object(instance)) + kInstanceTemplate)) != FindTemplate(compositeGuid))
+			{
+				error = "The instance at that path is not an instance of composite " + Hex(compositeGuid);
+				return false;
+			}
+			instances.push_back(instance);
+			return true;
+		}
+		CompositeTemplate* composite = FindTemplate(compositeGuid);
+		if (!composite)
+		{
+			error = "Composite " + Hex(compositeGuid) + " is not in the running level";
+			return false;
+		}
+		instances = ArrayItems(composite->instances);
+		return true;
+	}
+
 	void FlushEntity(Allocation* entity)
 	{
 		void* object = Object(entity);
@@ -1091,6 +1129,9 @@ void __fastcall LIVE_LINK::h_process(void* _this, void* /*_EDX*/)
 {
 	TrackTransport();
 	LIVE_LINK_SERVER::ProcessEntityRequests();
+	// After the requests, so an edit pushed this frame (which can rebind or restart the driven animation) is already in, and
+	// before the game processes and draws the frame
+	DriveAnimation();
 	process(_this);
 }
 
@@ -1607,36 +1648,8 @@ Result LIVE_LINK::CallMethod(uint32_t root, uint32_t compositeGuid, uint32_t ent
 	ManagerAccess access;
 
 	std::vector<Allocation*> instances;
-	if (!path.empty())
-	{
-		Allocation* instance = *reinterpret_cast<Allocation**>(EntityManager() + kManagerRoot);
-		for (uint32_t step : path)
-		{
-			instance = instance ? FindChild(instance, step) : nullptr;
-			if (!instance || !IsCompositeInstance(instance))
-			{
-				result.message = "The instance path does not resolve in the running level (at " + Hex(step) + ")";
-				return result;
-			}
-		}
-		if (instance && FindTemplate(compositeGuid) && *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(Object(instance)) + kInstanceTemplate) != 0 &&
-			Packed<CompositeTemplate>(*reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(Object(instance)) + kInstanceTemplate)) != FindTemplate(compositeGuid))
-		{
-			result.message = "The instance at that path is not an instance of composite " + Hex(compositeGuid);
-			return result;
-		}
-		instances.push_back(instance);
-	}
-	else
-	{
-		CompositeTemplate* composite = FindTemplate(compositeGuid);
-		if (!composite)
-		{
-			result.message = "Composite " + Hex(compositeGuid) + " is not in the running level";
-			return result;
-		}
-		instances = ArrayItems(composite->instances);
-	}
+	if (!FindInstances(compositeGuid, path, instances, result.message))
+		return result;
 
 	int called = 0, failed = 0;
 	for (Allocation* instance : instances)
@@ -1664,6 +1677,1006 @@ Result LIVE_LINK::CallMethod(uint32_t root, uint32_t compositeGuid, uint32_t ent
 	result.message = called == 0 && failed == 0 ? std::string("The entity is not in any running instance of the composite") : std::string(summary);
 	DevTools::Log("LiveLink: %s", result.message.c_str());
 	return result;
+}
+
+namespace
+{
+	// ---- Driving a CAGEAnimation for OpenCAGE (the live link's ANIMATION; the request is stored by LIVE_ANIMATION.cpp) ----
+
+	// An animation entity's fields
+	constexpr uintptr_t kAnimationVTable = 0x00ea8bf8;   // the vtable an animation entity starts with (its primary one)
+	constexpr uint32_t kAnimationInterface = 0x1C;       // its interface, which its settings (its length) are read through
+	constexpr uint32_t kAnimationPrevious = 0x28;        // the time it was last applied from (a double, seconds)
+	constexpr uint32_t kAnimationCurrent = 0x30;         // the time it is at (a double, seconds)
+	constexpr uint32_t kAnimationData = 0x38;            // its keyframe data (a packed pointer; 0xFFFFFFFF: none) - looked up afresh each time it is bound
+	constexpr uint32_t kAnimationBindings = 0x40;        // its bindings (an array: one for each entity its tracks move)
+	constexpr uint32_t kAnimationClip = 0x44;            // the cutscene clip it plays (null but for cinematics)
+	constexpr uint32_t kAnimationCinematicLoaded = 0x4A; // set when it starts: the first frame the game advances it after that fires its cinematic loaded output
+	constexpr uint32_t kAnimationJumpedToEnd = 0x4B;     // set once it has jumped to near its end (its jump to the end setting)
+	// A binding's fields: the entity it moves, and its tracks (an array; each a track's object)
+	constexpr uint32_t kBindingTarget = 0x20;
+	constexpr uint32_t kBindingTracks = 0x24;
+	// A track's fields and kinds (by the vtable it starts with). A track of numbers holds its value, which the parameter it
+	// is bound to reads; a track of a transform holds none - it sets its entity's own transform when it is applied.
+	constexpr uint32_t kTrackParameter = 0x04;           // the parameter it is bound to
+	constexpr uintptr_t kFloatTrackVTable = 0x00e79fb0;  // one number
+	constexpr uint32_t kFloatTrackValue = 0x50;          // 0 until the track is first applied
+	constexpr uintptr_t kVectorTrackVTable = 0x00fc57d4; // three numbers (a direction, or a colour)
+	constexpr uint32_t kVectorTrackValue = 0xE0;         // 0, 0, 0 until the track is first applied
+	constexpr uintptr_t kTransformTrackVTable = 0x00fc5724; // a transform (any other kind of parameter gets one of these too)
+	// An entity's state flags (at kEntityState)
+	constexpr uint32_t kStateStarted = 1u << 2;
+	constexpr uint32_t kStateEnabled = 1u << 7;          // for an animation: its tracks are bound (applying a time does nothing without)
+	constexpr uint32_t kStateUpdating = 1u << 18;        // the entity is updated every frame - for an animation, the game advances its time
+	constexpr uint32_t kStateInitialised = 1u << 28;
+	// A zone's state flags
+	constexpr uint32_t kZoneState = 0x08;
+	constexpr uint32_t kZoneLoaded = 1u << 0;
+	// The game's time step this frame (a double, seconds): what an animation the game plays advances by, times its play speed
+	constexpr uintptr_t kGameFrameTime = 0x012410c0;
+	// Flags for the record that goes with a call into an entity, as the game's per-frame update of an entity sets them
+	constexpr uint32_t kInfoUpdate = 0x40000000;
+	// ... and as an animation sets them when it has an entity it moved re-read its parameters
+	constexpr uint32_t kInfoRefresh = 0x10000000;
+	// How long an animation already applied is still driven while its zone is not loaded, before the drive waits for it: with
+	// the game camera away from the player that flag drops for a frame or two several times a second (seen: 20-50 ms at a
+	// time). The game applies an animation whatever its zone when a script stops or refreshes it, or its instance moves -
+	// only its own advancing of one waits for the zone - so riding through that is no more than the game does itself.
+	constexpr ULONGLONG kZoneGraceMs = 1000;
+	// That time counts only while frames look at the zone: after a gap this long without a look (edits had to wait, the
+	// level was not ready, another level ran) what the zone did meanwhile is not known, so a drop seen then starts it over
+	constexpr ULONGLONG kZoneLookGapMs = kZoneGraceMs / 4;
+	// How far short of its length an animation is kept: applied at its length, the game would finish it (and its event
+	// tracks stop the environment animations they started)
+	constexpr double kEndMargin = 1e-4;
+	// The latest time an animation of this length is applied at: the margin short of it, and short of it in single precision
+	// too - the game narrows the times to that before its tracks see them, and from 2048 s on the margin alone would round
+	// back up to the length
+	double EndLimit(float length)
+	{
+		const double limit = (std::min)(static_cast<double>(length) - kEndMargin, static_cast<double>(std::nextafter(length, 0.0f)));
+		return (std::max)(0.0, limit);
+	}
+
+	// Evaluates every track at current and has each bound entity re-read its parameters, runs the event tracks over
+	// previous..current (none when the two are equal, short of the length), then takes its current time as its previous
+	// one; does nothing unless the animation is enabled and ready is set
+	typedef void(__thiscall* t_apply_animation_time)(void* entity, Allocation** self, void** info, double previous, double current, float length, bool ready);
+	auto apply_animation_time = reinterpret_cast<t_apply_animation_time>(Address(0x00242140));
+	// The animation's length setting, read through its interface (10 when unset, clamped to 0.01..10000)
+	typedef float(__thiscall* t_animation_length)(void* animationInterface, Allocation** self);
+	auto animation_length = reinterpret_cast<t_animation_length>(Address(0x004ea500));
+	// Sets / clears the flag that the entity is updated every frame. Given true they start / stop the entity too; given
+	// false nothing else changes, and nothing fires.
+	typedef bool(__thiscall* t_updating)(void* state, Allocation** entity, void** info, bool startOrStopToo);
+	auto updating_on = reinterpret_cast<t_updating>(Address(0x00539dc0));
+	auto updating_off = reinterpret_cast<t_updating>(Address(0x00539ee0));
+	// An entity's transform as the game passes one (twelve numbers), the transform an entity gives (the fallback if it has
+	// none), and setting one. A transform track uses this very pair each time it is applied - it reads its entity's
+	// transform, changes the channels it animates and sets the result - so one set back as it was read leaves the entity
+	// where it was.
+	struct Transform { float values[12]; };
+	typedef Transform* (__cdecl* t_entity_transform)(Transform* result, Allocation** entity, Transform fallback);
+	auto entity_transform = reinterpret_cast<t_entity_transform>(Address(0x00004710));
+	typedef void(__cdecl* t_set_entity_transform)(Allocation** entity, const Transform* transform);
+	auto set_entity_transform = reinterpret_cast<t_set_entity_transform>(Address(0x004bc500));
+	// Has an entity re-read its parameters, as an animation has each entity it moves do once its tracks are evaluated
+	auto state_refresh = reinterpret_cast<t_state_call>(Address(0x00536c60));
+
+	// What a drive is for: the animation entity in the instance(s) a path names, in the level with this root
+	struct DriveTarget
+	{
+		uint32_t root = 0;
+		uint32_t composite = 0;
+		uint32_t entity = 0;
+		std::vector<uint32_t> path;
+		bool operator==(const DriveTarget& other) const
+		{
+			return root == other.root && composite == other.composite && entity == other.entity && path == other.path;
+		}
+	};
+	DriveTarget TargetOf(const LIVE_ANIMATION::Drive& drive)
+	{
+		DriveTarget target;
+		target.root = drive.root;
+		target.composite = drive.composite;
+		target.entity = drive.entity;
+		target.path = drive.path;
+		return target;
+	}
+
+	// What one entity an animation moves showed when the drive took the animation: a track's value, or the entity's
+	// transform (one for each entity, however many transform tracks it has)
+	struct SavedTrack
+	{
+		Allocation* target = nullptr; // never followed: matched with what a binding moves when the animation is given back
+		uint32_t targetId = 0;        // the entity's id then, so an allocation used again for another entity is not taken for it
+		uint32_t parameter = 0;       // the parameter the track is bound to (a transform's is the entity's own whatever it is)
+		uintptr_t kind = 0;           // the track's vtable
+		Transform value = {};         // one number, three, or the transform
+	};
+
+	// An animation entity the drive has taken from the game, and what goes back when it is given back: its times and flags
+	// as they were when it was taken - or as the level's own logic left them, if that started, stopped or rebound it since
+	// (taken again: a new baseline)
+	struct DrivenEntity
+	{
+		Allocation* entity = nullptr; // never followed: only compared with what the target resolves to in a later frame
+		uint32_t data = 0;            // its keyframe data (a pushed edit of it changes this)
+		uint32_t state = 0;           // its state flags
+		double previous = 0.0;
+		double current = 0.0;
+		uint8_t cinematicLoaded = 0;
+		uint8_t jumpedToEnd = 0;
+		bool clockTaken = false;      // the game was advancing it, and the drive stopped that (given back with it)
+		double applied = 0.0;         // the time the drive last applied
+		bool seen = false;            // the target resolved to it this frame
+		// The game showed nothing of it when it was taken (below): what the entities it moves showed then, put back when it
+		// is given back as well as its own time
+		bool restore = false;
+		std::vector<SavedTrack> saved;
+		ULONGLONG zoneLostSince = 0;  // when its zone was last found not loaded, while it stays so (0: loaded)
+		uint32_t zoneDrops = 0;       // how many times that has happened since it was taken
+		ULONGLONG zoneSeenAt = 0;     // when a frame last looked at its zone
+	};
+
+	// Whether the game shows nothing of an animation of its own: not started, not advanced, both times 0. One it never
+	// applied looks like that - its tracks of numbers still hold 0, and the entities its transform tracks move are where
+	// their own logic or another animation left them, not at its pose at 0 (applying it at 0 on giving it back would move
+	// them there). One stopped back at its start does too, its entities at its pose at 0 unless something moved them since.
+	// Either way, what its entities showed when it was taken is what they show without the drive.
+	bool ShowsNothing(uint32_t state, double previous, double current)
+	{
+		return !(state & (kStateStarted | kStateUpdating)) && previous == 0.0 && current == 0.0;
+	}
+
+	// Entity thread only: what has been taken, for which target, in which level (both identities only)
+	std::vector<DrivenEntity> g_driven;
+	DriveTarget g_drivenTarget;
+	uint32_t g_drivenRoot = 0;           // the running level's root composite id when it was taken
+	Allocation* g_drivenLevel = nullptr; // the running level's root instance then
+	// Where play has got to, and the request it started from: it starts again from that request's time when another comes
+	struct PlayClock
+	{
+		bool running = false;
+		uint32_t connection = 0;
+		uint32_t sequence = 0;
+		DriveTarget target;
+		double time = 0.0;
+	};
+	PlayClock g_clock;
+	bool g_idle = true;             // nothing asked for or held, and the snapshot says so: a frame does nothing
+	uint32_t g_appliedSequence = 0; // the request whose time a frame last applied (what the snapshot gives back while anything is taken)
+	const char* g_lostConnection = nullptr; // set when the drive was dropped for a disconnect, until what it took is given back
+	// The snapshot's state and reason as last logged (they are logged when they change)
+	LIVE_ANIMATION::State g_loggedState = LIVE_ANIMATION::State::Released;
+	std::string g_loggedReason;
+
+	// The animation entity in each instance the target names, each referenced (released when this goes, at the end of the
+	// frame: no reference is kept from one frame to the next)
+	struct AnimationFind
+	{
+		const DriveTarget* target = nullptr;
+		std::vector<Allocation*> entities;
+		bool resolved = false; // the instances were found (the animation may still be in none of them)
+		std::string error;     // why they were not
+		AnimationFind() = default;
+		AnimationFind(const AnimationFind&) = delete;
+		AnimationFind& operator=(const AnimationFind&) = delete;
+		~AnimationFind()
+		{
+			for (Allocation* entity : entities)
+			{
+				EntityRef ref;
+				EntityRef::Adopt(ref, entity);
+			}
+		}
+	};
+	void FindAnimationsBody(void* context)
+	{
+		AnimationFind& find = *static_cast<AnimationFind*>(context);
+		std::vector<Allocation*> instances;
+		if (!FindInstances(find.target->composite, find.target->path, instances, find.error))
+			return;
+		find.resolved = true;
+		for (Allocation* instance : instances)
+			if (Allocation* entity = ResolveEntity(instance, find.target->entity))
+				find.entities.push_back(entity);
+	}
+
+	// Whether one of the entity's zones (the getter in that slot) is loaded; present says whether it has that zone
+	bool ZoneLoaded(void* object, Allocation* entity, uint32_t slot, bool& present)
+	{
+		ZoneRef zone;
+		Virtual<Allocation** (__thiscall*)(void*, Allocation**, Allocation**)>(object, slot)(object, &zone.ptr, &entity);
+		present = zone.ptr && Object(zone.ptr);
+		return present && (*reinterpret_cast<const uint32_t*>(static_cast<uint8_t*>(Object(zone.ptr)) + kZoneState) & kZoneLoaded) != 0;
+	}
+
+	// An animation entity as it is now, read before anything is done to it: whether it can be driven, and if not, why
+	struct AnimationView
+	{
+		Allocation* entity = nullptr; // referenced by the caller
+		bool usable = false;
+		LIVE_ANIMATION::State problem = LIVE_ANIMATION::State::NotFound;
+		const char* reason = "";
+		float length = 0.0f;
+		bool read = false;            // it is an animation, and the fields below were read (even if it cannot be driven)
+		uint32_t state = 0;
+		double previous = 0.0;
+		double current = 0.0;
+		uint32_t data = 0;
+		uint8_t cinematicLoaded = 0;
+		uint8_t jumpedToEnd = 0;
+		bool zoneOnly = false;        // all that stops it being driven is its zone not being loaded (its length was read)
+	};
+	void InspectAnimationBody(void* context)
+	{
+		using LIVE_ANIMATION::State;
+		AnimationView& view = *static_cast<AnimationView*>(context);
+		const uint8_t* object = static_cast<const uint8_t*>(Object(view.entity));
+		if (!object)
+		{
+			view.reason = "The animation is not in the running instance";
+			return;
+		}
+		if (*reinterpret_cast<const uintptr_t*>(object) != Address(kAnimationVTable))
+		{
+			view.problem = State::NotAnimation;
+			view.reason = "The entity is not a CAGEAnimation in the running level";
+			return;
+		}
+		view.state = *reinterpret_cast<const uint32_t*>(object + kEntityState);
+		view.previous = *reinterpret_cast<const double*>(object + kAnimationPrevious);
+		view.current = *reinterpret_cast<const double*>(object + kAnimationCurrent);
+		view.data = *reinterpret_cast<const uint32_t*>(object + kAnimationData);
+		view.cinematicLoaded = object[kAnimationCinematicLoaded];
+		view.jumpedToEnd = object[kAnimationJumpedToEnd];
+		view.read = true;
+		if (!(view.state & kStateInitialised))
+		{
+			view.reason = "The animation is not set up in the game (not initialised yet, or shut down)";
+			return;
+		}
+		if (!(view.state & kStateEnabled))
+		{
+			view.problem = State::Disabled;
+			view.reason = "The animation is disabled in the game, so its tracks are bound to nothing - call 'enable' on it in the game first";
+			return;
+		}
+		if (view.data == 0xFFFFFFFF)
+		{
+			view.problem = State::NoData;
+			view.reason = "The animation has no keyframe data in the running level";
+			return;
+		}
+		if (*reinterpret_cast<void* const*>(object + kAnimationClip))
+		{
+			view.problem = State::Cinematic;
+			view.reason = "The animation plays a cutscene clip - cinematics are not driven";
+			return;
+		}
+		PauseContext pause(EntityManager(), view.entity);
+		view.length = animation_length(const_cast<uint8_t*>(object) + kAnimationInterface, &view.entity);
+		if (!std::isfinite(view.length) || !(view.length > 0.0f))
+		{
+			view.problem = State::NoData;
+			view.reason = "The animation's length cannot be read";
+			return;
+		}
+		// Ready as the game's own update tests an animation without a clip before it advances it: it has no zone, or its zone
+		// is loaded, or else its second zone is
+		void* entityObject = const_cast<uint8_t*>(object);
+		bool primary = false, secondary = false;
+		if (!ZoneLoaded(entityObject, view.entity, kVPrimaryZone, primary) && primary && !ZoneLoaded(entityObject, view.entity, kVSecondaryZone, secondary))
+		{
+			view.problem = State::Waiting;
+			view.reason = "Its zone is not loaded";
+			view.zoneOnly = true;
+			return;
+		}
+		view.usable = true;
+	}
+
+	// The entity a binding moves, and its tracks (nothing for one that moves nothing)
+	Allocation* BindingTarget(Allocation* binding, std::vector<Allocation*>& tracks)
+	{
+		tracks.clear();
+		uint8_t* bindingObject = static_cast<uint8_t*>(Object(binding));
+		Allocation* target = bindingObject ? *reinterpret_cast<Allocation**>(bindingObject + kBindingTarget) : nullptr;
+		if (!target || !Object(target))
+			return nullptr;
+		tracks = ArrayItems(*reinterpret_cast<void**>(bindingObject + kBindingTracks));
+		return target;
+	}
+
+	// Reads what each entity the animation's tracks move shows now: the value each track of numbers holds (what its
+	// parameter reads), and the transform of each entity a transform track moves
+	void SaveTargets(uint8_t* object, std::vector<SavedTrack>& saved)
+	{
+		saved.clear();
+		// The fallback passed for a transform: one that comes back as this was never read (the entity could not be got at,
+		// or set up), so it is not saved - the game's own fallback, set back at give-back, would put the entity at the world
+		// origin
+		Transform unread;
+		for (float& value : unread.values)
+			value = std::numeric_limits<float>::quiet_NaN();
+		std::vector<Allocation*> tracks;
+		for (Allocation* binding : ArrayItems(*reinterpret_cast<void**>(object + kAnimationBindings)))
+		{
+			Allocation* target = BindingTarget(binding, tracks);
+			if (!target)
+				continue;
+			bool transformSaved = false;
+			for (Allocation* track : tracks)
+			{
+				const uint8_t* trackObject = static_cast<const uint8_t*>(Object(track));
+				if (!trackObject)
+					continue;
+				SavedTrack entry;
+				entry.target = target;
+				entry.targetId = EntityGuid(target);
+				entry.parameter = *reinterpret_cast<const uint32_t*>(trackObject + kTrackParameter);
+				entry.kind = *reinterpret_cast<const uintptr_t*>(trackObject);
+				if (entry.kind == Address(kFloatTrackVTable))
+					memcpy(entry.value.values, trackObject + kFloatTrackValue, sizeof(float));
+				else if (entry.kind == Address(kVectorTrackVTable))
+					memcpy(entry.value.values, trackObject + kVectorTrackValue, 3 * sizeof(float));
+				else if (entry.kind == Address(kTransformTrackVTable) && !transformSaved)
+				{
+					entity_transform(&entry.value, &target, unread);
+					transformSaved = true;
+					if (std::isnan(entry.value.values[0]))
+						continue;
+				}
+				else
+					continue;
+				saved.push_back(entry);
+			}
+		}
+	}
+
+	// Puts back what was read when the animation was taken, matched with the bindings it has now by entity (and parameter),
+	// so a binding made afresh since gets it too. Called once the animation's own time has been applied again:
+	// - an entity's transform is its own, read back as it was set: it is set back as it was, and the entity has its
+	//   parameters re-read after it, as applying the animation does after moving it - exactly what it showed;
+	// - a track's number is what its parameter reads, but what the entity made of it is its own and cannot be read: it
+	//   shows the animation's start (as the time just applied left it) until it next re-reads its parameters, and from then
+	//   on what the game left there - one that reads them every frame, at once. Having it re-read now would show that at
+	//   once, but an entity that had not re-read since the animation was bound (one pushed from the editor, say) showed its
+	//   own value, not that: forcing it would change what it shows.
+	struct RestoreCounts
+	{
+		uint32_t values = 0;
+		uint32_t transforms = 0;
+	};
+	const SavedTrack* FindSaved(const std::vector<SavedTrack>& saved, Allocation* target, uint32_t targetId, uintptr_t kind, uint32_t parameter)
+	{
+		const bool transform = kind == Address(kTransformTrackVTable);
+		auto match = std::find_if(saved.begin(), saved.end(), [&](const SavedTrack& entry)
+		{
+			return entry.target == target && entry.targetId == targetId && entry.kind == kind && (transform || entry.parameter == parameter);
+		});
+		return match == saved.end() ? nullptr : &*match;
+	}
+	void RestoreTargets(uint8_t* manager, uint8_t* object, const std::vector<SavedTrack>& saved, RestoreCounts& counts)
+	{
+		std::vector<Allocation*> tracks;
+		for (Allocation* binding : ArrayItems(*reinterpret_cast<void**>(object + kAnimationBindings)))
+		{
+			Allocation* target = BindingTarget(binding, tracks);
+			if (!target)
+				continue;
+			const uint32_t targetId = EntityGuid(target);
+			// Its transform first (one for the entity, however many transform tracks move it), and the re-read after it
+			for (Allocation* track : tracks)
+			{
+				const uint8_t* trackObject = static_cast<const uint8_t*>(Object(track));
+				const uintptr_t kind = trackObject ? *reinterpret_cast<const uintptr_t*>(trackObject) : 0;
+				const SavedTrack* entry = kind == Address(kTransformTrackVTable) ? FindSaved(saved, target, targetId, kind, 0) : nullptr;
+				if (!entry)
+					continue;
+				EntityRef held(target);
+				set_entity_transform(&target, &entry->value);
+				InfoRef info;
+				create_info(manager, &info.ptr, &target, kInfoRefresh, 0, nullptr);
+				state_refresh(EntityState(target), &target, &info.ptr);
+				counts.transforms++;
+				break;
+			}
+			// Then the numbers, under what it shows
+			for (Allocation* track : tracks)
+			{
+				uint8_t* trackObject = static_cast<uint8_t*>(Object(track));
+				if (!trackObject)
+					continue;
+				const uintptr_t kind = *reinterpret_cast<const uintptr_t*>(trackObject);
+				const SavedTrack* entry = FindSaved(saved, target, targetId, kind, *reinterpret_cast<const uint32_t*>(trackObject + kTrackParameter));
+				if (!entry)
+					continue;
+				if (kind == Address(kFloatTrackVTable))
+					memcpy(trackObject + kFloatTrackValue, entry->value.values, sizeof(float));
+				else if (kind == Address(kVectorTrackVTable))
+					memcpy(trackObject + kVectorTrackValue, entry->value.values, 3 * sizeof(float));
+				else
+					continue;
+				counts.values++;
+			}
+		}
+	}
+
+	// Takes the animation from the game the first time it is driven (or again, after the level's own logic changed it),
+	// then applies the time to it
+	struct AnimationApply
+	{
+		Allocation* entity = nullptr;       // referenced by the caller
+		const AnimationView* view = nullptr;
+		DrivenEntity* driven = nullptr;     // its record: filled in afresh when it is taken (again)
+		bool take = false;                  // not taken before
+		double time = 0.0;                  // where it is to be, short of its length
+		bool events = false;                // run the event tracks over what the frame passed (play, when asked to)
+		// What was done
+		const char* retaken = nullptr;      // why it was taken again
+		bool applied = false;
+		double from = 0.0;
+	};
+	void ApplyAnimationBody(void* context)
+	{
+		AnimationApply& op = *static_cast<AnimationApply*>(context);
+		uint8_t* manager = EntityManager();
+		uint8_t* object = static_cast<uint8_t*>(Object(op.entity));
+		const AnimationView& view = *op.view;
+		DrivenEntity& driven = *op.driven;
+		PauseContext pause(manager, op.entity);
+		InfoRef info;
+		create_info(manager, &info.ptr, &op.entity, kInfoUpdate, 0, nullptr);
+
+		// The level's own logic may have changed it since the last frame: the game advancing it again (a script started it,
+		// or an edit put back an initial state that starts it), or a script starting or stopping it. What it gives back is
+		// then what that left - a new baseline, and its clock taken again if the game advances it. Bound afresh to new
+		// keyframe data alone (an edit of it pushed) changes what its tracks evaluate, not its times: those it shows are the
+		// drive's, so the ones it had are kept.
+		bool rebound = false;
+		if (!op.take)
+		{
+			if (view.state & kStateUpdating)
+				op.retaken = "the game advances it again";
+			else if ((view.state ^ driven.state) & kStateStarted)
+				op.retaken = (view.state & kStateStarted) ? "it was started" : "it was stopped";
+			else if (view.data != driven.data)
+			{
+				rebound = true;
+				op.retaken = "it was bound afresh to new keyframe data - its own times are kept";
+				driven.data = view.data;
+				driven.state = view.state;
+				driven.cinematicLoaded = view.cinematicLoaded;
+				driven.jumpedToEnd = view.jumpedToEnd;
+			}
+		}
+		const bool baseline = op.take || op.retaken;
+		if (baseline && !rebound)
+		{
+			driven.entity = op.entity;
+			driven.data = view.data;
+			driven.state = view.state;
+			driven.previous = view.previous;
+			driven.current = view.current;
+			driven.cinematicLoaded = view.cinematicLoaded;
+			driven.jumpedToEnd = view.jumpedToEnd;
+			driven.clockTaken = false;
+			if (view.state & kStateUpdating)
+			{
+				// That flag alone: the animation is not stopped, and nothing fires
+				updating_off(object + kEntityState, &op.entity, &info.ptr, false);
+				driven.clockTaken = true;
+			}
+			// One the game shows nothing of: what its entities show, read before anything is applied
+			driven.restore = false;
+			driven.saved.clear();
+			if (ShowsNothing(view.state, view.previous, view.current))
+			{
+				SaveTargets(object, driven.saved);
+				driven.restore = true;
+			}
+		}
+
+		// Applied every frame, as the game applies an animation it plays, so nothing done to it since shows: being bound
+		// afresh (a pushed edit, enabling it again, its zone being set) leaves its times as they were but its tracks
+		// unevaluated, with nothing to tell from outside that it happened, and a refresh of its instance seeks it. With its
+		// two times equal, short of its length, it runs no event track.
+		double* previous = reinterpret_cast<double*>(object + kAnimationPrevious);
+		double* current = reinterpret_cast<double*>(object + kAnimationCurrent);
+		// From the time last applied, so the event tracks run over what the frame passed - only when asked to and nothing
+		// else moved it; otherwise from the time itself, which runs none of them
+		op.from = op.events && !baseline && *current == driven.applied && op.time != driven.applied ? driven.applied : op.time;
+		*previous = op.from;
+		*current = op.time;
+		apply_animation_time(object, &op.entity, &info.ptr, op.from, op.time, view.length, true);
+		driven.applied = op.time;
+		op.applied = true;
+	}
+
+	// Gives one animation entity back: its own time applied again (short of its length, where applying it would stop what
+	// its event tracks started), its own times and flags exactly, and its clock if the drive took it - unless the level's
+	// own logic has started or stopped it since the drive last looked at it (in the frame before, in an edit pushed in this
+	// one, or while it waited or could not be driven): that has it now, and it is left exactly as that left it. Its saved
+	// times would undo what that did, and a stopped animation given its clock back would play on from them and finish.
+	// One the game showed nothing of when it was taken also has the entities it moves put back as they were then: its pose
+	// at its own time is not what they showed (another animation may have moved them since, or its tracks never ran).
+	struct AnimationHandBack
+	{
+		Allocation* entity = nullptr; // referenced by the caller: what the target resolves to now, and the one taken
+		const DrivenEntity* driven = nullptr;
+		// What was done
+		bool done = false;
+		const char* leftToLevel = nullptr; // why it was left as the level's own logic left it
+		uint32_t stateBefore = 0;
+		uint32_t stateAfter = 0;
+		double timeBefore = 0.0;
+		bool clockGiven = false;
+		bool restored = false;             // its entities were put back as they were when it was taken
+		RestoreCounts counts;
+	};
+	void HandBackBody(void* context)
+	{
+		AnimationHandBack& op = *static_cast<AnimationHandBack*>(context);
+		uint8_t* manager = EntityManager();
+		uint8_t* object = static_cast<uint8_t*>(Object(op.entity));
+		const DrivenEntity& driven = *op.driven;
+		// One shut down since (or no animation at all now) has nothing to give back
+		if (!object || *reinterpret_cast<const uintptr_t*>(object) != Address(kAnimationVTable))
+			return;
+		const uint32_t* state = reinterpret_cast<const uint32_t*>(object + kEntityState);
+		if (!(*state & kStateInitialised))
+			return;
+		double* previous = reinterpret_cast<double*>(object + kAnimationPrevious);
+		double* current = reinterpret_cast<double*>(object + kAnimationCurrent);
+		op.stateBefore = *state;
+		op.timeBefore = *current;
+		if ((*state & kStateUpdating) || ((*state ^ driven.state) & kStateStarted))
+		{
+			op.leftToLevel = (*state & kStateUpdating) ? "the game advances it again" : (*state & kStateStarted) ? "it was started" : "it was stopped";
+			op.stateAfter = *state;
+			op.done = true;
+			return;
+		}
+		PauseContext pause(manager, op.entity);
+		InfoRef info;
+		create_info(manager, &info.ptr, &op.entity, kInfoUpdate, 0, nullptr);
+		object[kAnimationCinematicLoaded] = driven.cinematicLoaded;
+		object[kAnimationJumpedToEnd] = driven.jumpedToEnd;
+		const float length = animation_length(object + kAnimationInterface, &op.entity);
+		if (std::isfinite(driven.current) && std::isfinite(length) && length > 0.0f)
+		{
+			const double time = (std::min)(driven.current, EndLimit(length));
+			*previous = time;
+			*current = time;
+			apply_animation_time(object, &op.entity, &info.ptr, time, time, length, true);
+		}
+		// After that (which also sends its time out to what reads it): its entities as they were when it was taken
+		if (driven.restore)
+		{
+			RestoreTargets(manager, object, driven.saved, op.counts);
+			op.restored = true;
+		}
+		// Its own times exactly (a finished animation's is its length)
+		*previous = driven.previous;
+		*current = driven.current;
+		if (driven.clockTaken && !(*state & kStateUpdating))
+		{
+			updating_on(object + kEntityState, &op.entity, &info.ptr, false);
+			op.clockGiven = true;
+		}
+		op.stateAfter = *state;
+		op.done = true;
+	}
+
+	void PublishAnimation(LIVE_ANIMATION::State state, const std::string& reason, double time, double length, uint32_t applied, uint32_t found)
+	{
+		LIVE_ANIMATION::Snapshot snapshot;
+		snapshot.state = state;
+		snapshot.reason = reason;
+		snapshot.time = time;
+		snapshot.length = length;
+		// The request whose time the game shows: none once nothing is taken, and an older one while a newer waits
+		snapshot.sequence = g_driven.empty() ? 0 : g_appliedSequence;
+		snapshot.applied = applied;
+		snapshot.found = found;
+		snapshot.taken = !g_driven.empty();
+		snapshot.wasPlaying = std::any_of(g_driven.begin(), g_driven.end(), [](const DrivenEntity& driven) { return driven.clockTaken; });
+		LIVE_ANIMATION::Publish(snapshot);
+		if (state != g_loggedState || reason != g_loggedReason)
+		{
+			DevTools::Log("LiveLink: animation %s: %s", LIVE_ANIMATION::StateName(state), reason.c_str());
+			g_loggedState = state;
+			g_loggedReason = reason;
+		}
+	}
+
+	// The level they were taken in has gone (or they have): what was taken is dropped, and nothing is done to it
+	void ForgetDriven(const char* why)
+	{
+		if (!g_driven.empty())
+			DevTools::Log("LiveLink: animation forgotten (%s): %zu taken, left as they are", why, g_driven.size());
+		g_driven.clear();
+		g_clock.running = false;
+	}
+
+	// Gives everything taken back - each entity the target still resolves to (any it no longer does have gone)
+	void HandBackDriven(const char* why)
+	{
+		{
+			ManagerAccess access;
+			AnimationFind find;
+			find.target = &g_drivenTarget;
+			Guarded("finding an animation to give back", FindAnimationsBody, &find);
+			for (DrivenEntity& driven : g_driven)
+				driven.seen = false;
+			for (Allocation* entity : find.entities)
+			{
+				auto match = std::find_if(g_driven.begin(), g_driven.end(), [entity](const DrivenEntity& driven) { return driven.entity == entity && !driven.seen; });
+				if (match == g_driven.end())
+					continue;
+				match->seen = true;
+				AnimationHandBack op;
+				op.entity = entity;
+				op.driven = &*match;
+				const bool ok = Guarded("giving an animation back", HandBackBody, &op);
+				// How often its zone was found not loaded while it was taken (said only when it was)
+				char zone[96] = "";
+				if (match->zoneDrops)
+					snprintf(zone, sizeof(zone), "; its zone was not loaded %u time(s) meanwhile", match->zoneDrops);
+				if (op.done && op.leftToLevel)
+					DevTools::Log("LiveLink: animation given back %s: %s - left as the level's logic left it (since the drive last looked at it, %s): time %.4f, "
+						"state %08X (what it would have given back: time %.4f, previous %.4f, state %08X)%s", why, Hex(g_drivenTarget.entity).c_str(), op.leftToLevel,
+						op.timeBefore, op.stateBefore, match->current, match->previous, match->state, zone);
+				else if (op.done)
+				{
+					// Which way it went back: its pose at its own time, or its entities as they were when it was taken
+					char how[256] = "its own time applied again";
+					if (op.restored)
+						snprintf(how, sizeof(how), "its own time applied again, then its entities put back as they were when it was taken (the game showed "
+							"nothing of it then): %u transform(s), %u track value(s)", op.counts.transforms, op.counts.values);
+					DevTools::Log("LiveLink: animation given back %s: %s - time %.4f -> %.4f (previous %.4f), state %08X -> %08X%s; %s%s", why, Hex(g_drivenTarget.entity).c_str(),
+						op.timeBefore, match->current, match->previous, op.stateBefore, op.stateAfter, op.clockGiven ? ", and the game advances it again" : "", how, zone);
+				}
+				else
+					DevTools::Log("LiveLink: animation not given back %s: %s - %s", why, Hex(g_drivenTarget.entity).c_str(),
+						ok ? "it is not set up in the game any more" : "an exception was raised");
+			}
+			const size_t missing = static_cast<size_t>(std::count_if(g_driven.begin(), g_driven.end(), [](const DrivenEntity& driven) { return !driven.seen; }));
+			if (missing)
+				DevTools::Log("LiveLink: animation: %zu taken could not be given back (no longer in the level)", missing);
+		}
+		g_driven.clear();
+		g_clock.running = false;
+		LIVE_LINK_SERVER::ShowActivity("Animation given back");
+	}
+}
+
+void LIVE_LINK::DriveAnimation()
+{
+	// Nothing asked for, nothing held, and the snapshot already says so: the game is left alone (all a frame costs while the
+	// animation drive is not in use)
+	if (g_idle && !LIVE_ANIMATION::Wanted())
+		return;
+	g_idle = false;
+
+	using LIVE_ANIMATION::State;
+	LIVE_ANIMATION::Drive drive;
+	const uint32_t generation = LIVE_ANIMATION::CurrentDrive(drive);
+	bool wanted = drive.mode != LIVE_ANIMATION::Release;
+	// Checked every frame: the connection that asked must still be OpenCAGE's
+	if (wanted && (!LIVE_LINK_SERVER::Connected() || drive.connection != LIVE_LINK_SERVER::CurrentConnection()))
+	{
+		// Over for good: nobody is left to take it back - unless a newer request replaced it since
+		LIVE_ANIMATION::DropDrive(generation);
+		wanted = false;
+		g_lostConnection = "on disconnect";
+	}
+	if (wanted)
+		g_lostConnection = nullptr;
+	const char* why = g_lostConnection ? g_lostConnection : "on release";
+
+	// The level what was taken belongs to has gone, or is going (unloading, or another level, or the same one loaded again):
+	// its entities go with it, so it is only forgotten
+	const char* notReady = NotReadyForEdits();
+	if (!g_driven.empty() && (notReady || *reinterpret_cast<uint32_t*>(EntityManager() + kManagerRootGuid) != g_drivenRoot ||
+		*reinterpret_cast<Allocation**>(EntityManager() + kManagerRoot) != g_drivenLevel))
+		ForgetDriven("its level has gone");
+
+	// Given back on a release, a disconnect, or a request for another animation - in a frame that may edit, as edits are
+	const DriveTarget target = TargetOf(drive);
+	if (!g_driven.empty() && (!wanted || !(target == g_drivenTarget)))
+	{
+		if (const char* wait = EditsMustWait())
+		{
+			PublishAnimation(State::Waiting, std::string(wait) + " - the animation is given back once the level is played again", drive.time, 0.0, 0, 0);
+			return;
+		}
+		HandBackDriven(wanted ? "for another animation" : why);
+	}
+	if (!wanted)
+	{
+		PublishAnimation(State::Released, "Not driven", 0.0, 0.0, 0, 0);
+		g_lostConnection = nullptr;
+		g_idle = true;
+		return;
+	}
+	if (drive.mode != LIVE_ANIMATION::Play)
+		g_clock.running = false;
+	// The time said while it is not applied: play's as far as it got, when it is playing this request
+	const bool playing = drive.mode == LIVE_ANIMATION::Play && g_clock.running && g_clock.sequence == drive.sequence &&
+		g_clock.connection == drive.connection && g_clock.target == target;
+	const double asked = playing ? g_clock.time : drive.time;
+
+	// Carried out only in its own level, while its scripts run (as edits are)
+	if (notReady)
+	{
+		PublishAnimation(State::Waiting, notReady, asked, 0.0, 0, 0);
+		return;
+	}
+	if (!RunningLevelIs(drive.root))
+	{
+		PublishAnimation(State::Waiting, "The game is running a different level - save, and load this one in the game", asked, 0.0, 0, 0);
+		return;
+	}
+	if (const char* wait = EditsMustWait())
+	{
+		PublishAnimation(State::Waiting, wait, asked, 0.0, 0, 0);
+		return;
+	}
+
+	ManagerAccess access;
+	AnimationFind find;
+	find.target = &target;
+	if (!Guarded("finding an animation", FindAnimationsBody, &find))
+	{
+		PublishAnimation(State::NotFound, "The game raised an exception while the animation was looked for (see the log)", asked, 0.0, 0, 0);
+		return;
+	}
+	if (!find.resolved)
+	{
+		ForgetDriven("its instance is not in the level any more");
+		PublishAnimation(State::NotFound, find.error + " (save, and load the level in the game, if it is new)", asked, 0.0, 0, 0);
+		return;
+	}
+
+	// Read each first: the play clock follows the first one's length
+	std::vector<AnimationView> views(find.entities.size());
+	for (DrivenEntity& driven : g_driven)
+		driven.seen = false;
+	const AnimationView* first = nullptr;   // the first that can be driven now
+	const AnimationView* problem = nullptr; // the first that cannot: why, when none can
+	for (size_t i = 0; i < views.size(); i++)
+	{
+		AnimationView& view = views[i];
+		view.entity = find.entities[i];
+		if (!Guarded("reading an animation", InspectAnimationBody, &view))
+		{
+			view.usable = false;
+			view.problem = State::NotFound;
+			view.reason = "The game raised an exception while the animation was read (see the log)";
+		}
+		for (DrivenEntity& driven : g_driven)
+		{
+			if (driven.entity != view.entity)
+				continue;
+			driven.seen = true;
+			// One already taken (so applied) is driven on through its zone not being loaded for a moment - only the first
+			// apply waits for the zone - and waits for it only once that has lasted
+			const ULONGLONG now = GetTickCount64();
+			const bool lookedAway = now - driven.zoneSeenAt > kZoneLookGapMs;
+			driven.zoneSeenAt = now;
+			if (!view.zoneOnly)
+			{
+				driven.zoneLostSince = 0;
+				continue;
+			}
+			if (!driven.zoneLostSince)
+				driven.zoneDrops++;
+			if (!driven.zoneLostSince || lookedAway)
+				driven.zoneLostSince = now;
+			if (now - driven.zoneLostSince < kZoneGraceMs)
+				view.usable = true;
+		}
+		if (view.usable && !first)
+			first = &view;
+		if (!view.usable && !problem)
+			problem = &view;
+	}
+	// Any taken that the target no longer resolves to have gone (taken out by an edit, say)
+	const size_t taken = g_driven.size();
+	g_driven.erase(std::remove_if(g_driven.begin(), g_driven.end(), [](const DrivenEntity& driven) { return !driven.seen; }), g_driven.end());
+	if (g_driven.size() != taken)
+		DevTools::Log("LiveLink: animation forgotten (no longer in the level): %zu taken", taken - g_driven.size());
+	// One taken that cannot be driven this frame (disabled, or its zone not loaded for a while) is not applied, but what the
+	// level's own logic does to it meanwhile is still followed, so a long wait cannot leave a stale record to give back: a
+	// script that starts or stops it makes what it has now the baseline, and its clock the game's (taken again once it can
+	// be driven, if the game advances it)
+	for (const AnimationView& view : views)
+	{
+		if (view.usable || !view.read || !(view.state & kStateInitialised))
+			continue;
+		for (DrivenEntity& driven : g_driven)
+		{
+			if (driven.entity != view.entity)
+				continue;
+			const bool advanced = (view.state & kStateUpdating) && (driven.clockTaken || !(driven.state & kStateUpdating));
+			if (!advanced && !((view.state ^ driven.state) & kStateStarted))
+				continue;
+			DevTools::Log("LiveLink: animation taken again (%s, while it cannot be driven: %s): %s - state %08X -> %08X, time %.4f -> %.4f (previous %.4f -> %.4f)%s",
+				advanced ? "the game advances it again" : (view.state & kStateStarted) ? "it was started" : "it was stopped", view.reason, Hex(target.entity).c_str(),
+				driven.state, view.state, driven.current, view.current, driven.previous, view.previous, driven.clockTaken ? "; its clock is the game's again" : "");
+			driven.data = view.data;
+			driven.state = view.state;
+			driven.previous = view.previous;
+			driven.current = view.current;
+			driven.cinematicLoaded = view.cinematicLoaded;
+			driven.jumpedToEnd = view.jumpedToEnd;
+			driven.clockTaken = false;
+			// What its entities showed when it was taken is not what the level's logic left them showing now: it goes back
+			// at its own time instead
+			driven.restore = false;
+			driven.saved.clear();
+		}
+	}
+
+	// The time to show: a hold's own; play's on from where the last frame left it by the game's own time step (or from the
+	// request's time, when it is a new one). Never the length itself, where the game would finish it.
+	const double length = first ? first->length : 0.0;
+	double time = asked;
+	bool events = false, ended = false;
+	if (first)
+	{
+		const double limit = EndLimit(first->length);
+		if (drive.mode == LIVE_ANIMATION::Hold)
+			time = std::clamp(asked, 0.0, limit);
+		else
+		{
+			const bool restart = !g_clock.running || g_clock.sequence != drive.sequence || g_clock.connection != drive.connection || !(g_clock.target == target);
+			double step = *reinterpret_cast<const double*>(Address(kGameFrameTime));
+			if (!std::isfinite(step) || step < 0.0)
+				step = 0.0;
+			time = restart ? asked : g_clock.time + step * drive.rate;
+			bool jumped = restart;
+			if (drive.flags & LIVE_ANIMATION::Loop)
+			{
+				// Wrapped without running the event tracks across the wrap
+				if (time >= limit || time < 0.0)
+				{
+					time = std::fmod(time, length);
+					if (time < 0.0)
+						time += length;
+					if (!(time < limit))
+						time = 0.0;
+					jumped = true;
+				}
+			}
+			else if (time >= limit)
+			{
+				time = limit;
+				ended = drive.rate > 0.0f;
+			}
+			else if (time <= 0.0)
+			{
+				time = 0.0;
+				ended = drive.rate < 0.0f;
+			}
+			events = (drive.flags & LIVE_ANIMATION::Events) != 0 && !jumped;
+			g_clock.running = true;
+			g_clock.connection = drive.connection;
+			g_clock.sequence = drive.sequence;
+			g_clock.target = target;
+			g_clock.time = time;
+		}
+	}
+
+	uint32_t applied = 0;
+	bool faulted = false;
+	for (AnimationView& view : views)
+	{
+		if (!view.usable)
+			continue;
+		// Each instance short of its own length (an override can give one another)
+		const double entityTime = std::clamp(time, 0.0, EndLimit(view.length));
+		size_t index = g_driven.size();
+		for (size_t i = 0; i < g_driven.size(); i++)
+			if (g_driven[i].entity == view.entity)
+				index = i;
+		const bool take = index == g_driven.size();
+		const bool firstTake = take && g_driven.empty();
+		if (take)
+		{
+			if (firstTake)
+			{
+				g_drivenTarget = target;
+				g_drivenRoot = *reinterpret_cast<uint32_t*>(EntityManager() + kManagerRootGuid);
+				g_drivenLevel = *reinterpret_cast<Allocation**>(EntityManager() + kManagerRoot);
+			}
+			g_driven.push_back(DrivenEntity());
+		}
+		AnimationApply op;
+		op.entity = view.entity;
+		op.view = &view;
+		op.driven = &g_driven[index];
+		op.take = take;
+		op.time = entityTime;
+		op.events = events;
+		const bool ok = Guarded("driving an animation", ApplyAnimationBody, &op);
+		DrivenEntity& driven = g_driven[index];
+		if (take && !driven.entity)
+		{
+			// It faulted before anything was taken
+			g_driven.erase(g_driven.begin() + index);
+			faulted = true;
+			continue;
+		}
+		driven.seen = true;
+		if (take || op.retaken)
+		{
+			const CompositeTemplate* composite = FindTemplate(target.composite);
+			const std::string name = composite && composite->debug_name ? composite->debug_name : Hex(target.composite);
+			// Whether the game showed nothing of it, so what its entities show was read to be put back
+			char saved[128] = "";
+			if (driven.restore)
+				snprintf(saved, sizeof(saved), "; the game showed nothing of it - its entities go back as they were then (%zu read)", driven.saved.size());
+			if (take)
+				DevTools::Log("LiveLink: animation taken: %s in %s - state %08X, time %.4f (previous %.4f), length %.4f; the game %s; %s %.4f%s%s",
+					Hex(target.entity).c_str(), name.c_str(), view.state, view.current, view.previous, view.length,
+					driven.clockTaken ? "was advancing it (its clock is taken)" : "was not advancing it", op.applied ? "applied at" : "left at", entityTime,
+					saved, ok ? "" : " (an exception was raised)");
+			else
+				DevTools::Log("LiveLink: animation taken again (%s): %s - state %08X, time %.4f (previous %.4f)%s; %s %.4f%s%s", op.retaken,
+					Hex(target.entity).c_str(), view.state, view.current, view.previous, driven.clockTaken ? ", its clock taken again" : "",
+					op.applied ? "applied at" : "left at", entityTime, saved, ok ? "" : " (an exception was raised)");
+			if (firstTake)
+				LIVE_LINK_SERVER::ShowActivity("OpenCAGE is animating " + name + " " + Hex(target.entity));
+		}
+		if (ok)
+			applied++;
+		else
+			faulted = true;
+	}
+
+	State state;
+	std::string reason;
+	if (applied > 0)
+	{
+		// What ANIMATION_GET gives back as applied: only ever a request a frame has shown
+		g_appliedSequence = drive.sequence;
+		if (drive.mode == LIVE_ANIMATION::Hold)
+		{
+			state = State::Held;
+			reason = "Held at the time OpenCAGE sent";
+		}
+		else if (ended)
+		{
+			state = State::Ended;
+			reason = "Played to its end, and held just short of it (where the game would finish it)";
+		}
+		else
+		{
+			state = State::Playing;
+			reason = std::string("Playing") + ((drive.flags & LIVE_ANIMATION::Loop) ? ", looping" : "") + ((drive.flags & LIVE_ANIMATION::Events) ? ", running its event tracks" : "");
+		}
+	}
+	else if (faulted)
+	{
+		state = State::NotFound;
+		reason = "The game raised an exception while the animation was driven (see the log)";
+	}
+	else if (problem)
+	{
+		state = problem->problem;
+		reason = problem->reason;
+	}
+	else
+	{
+		state = State::NotFound;
+		reason = "The animation is not in the running instance(s) of its composite (save, and load the level in the game, if it is new)";
+	}
+	PublishAnimation(state, reason, time, length, applied, static_cast<uint32_t>(views.size()));
 }
 
 Result LIVE_LINK::Describe(uint32_t compositeGuid)
@@ -1751,10 +2764,12 @@ Result LIVE_LINK::Status()
 	uint8_t* manager = EntityManager();
 	// Whether the game is rendering from the camera OpenCAGE sends (the CAMERA command, applied in LIVE_CAMERA.cpp)
 	const std::string cameraSync = std::string("\ncamera_sync=") + (LIVE_CAMERA::Applying() ? "1" : "0");
+	// Whether it has an animation taken for OpenCAGE (the ANIMATION command, carried out every entity frame - see above)
+	const std::string animation = std::string("\nanimation=") + (LIVE_ANIMATION::Driving() ? "1" : "0");
 	if (!LevelRunning())
 	{
 		result.ok = true;
-		result.message = "running=0" + cameraSync;
+		result.message = "running=0" + cameraSync + animation;
 		return result;
 	}
 	const uint32_t rootGuid = *reinterpret_cast<uint32_t*>(manager + kManagerRootGuid);
@@ -1773,6 +2788,6 @@ Result LIVE_LINK::Status()
 	CameraReading camera;
 	if (Guarded("reading the camera", ReadCameraBody, &camera) && camera.ok)
 		result.message += "\ncamera=" + Triple(camera.position) + "\ncamera_forward=" + Triple(camera.forward) + "\ncamera_up=" + Triple(camera.up);
-	result.message += cameraSync;
+	result.message += cameraSync + animation;
 	return result;
 }
