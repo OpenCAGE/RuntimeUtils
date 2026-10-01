@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <map>
 #include <string>
@@ -48,6 +49,9 @@ namespace
 	uint32_t g_transport = ~0u;
 	ULONGLONG g_transportSince = 0;
 	uint32_t g_transportStopped = kTransportPaused;
+	// Whether this level's scripts have run for the whole settle time since it loaded: a pause after that is a cutscene or
+	// a message on screen waiting for the player, not the level starting
+	bool g_levelPlayed = false;
 
 	// An entity's fields: its vtable, its state flags, its owner, then its id and its type
 	constexpr uint32_t kEntityState = 0x04;
@@ -291,6 +295,22 @@ namespace
 		return text ? text : "";
 	}
 
+	// Floats by value, not by their bits: -0 and +0 are the same number, and a writer that shares equal values between
+	// parameters (CathodeLib's does) can hand an unchanged parameter the other one - which, compared bit for bit, made a
+	// new variable in the root re-initialise every instance placed in it (a mission included)
+	bool FloatsEqual(const uint32_t* a, const uint32_t* b, uint32_t count)
+	{
+		for (uint32_t i = 0; i < count; i++)
+		{
+			float x, y;
+			memcpy(&x, a + i, sizeof(float));
+			memcpy(&y, b + i, sizeof(float));
+			if (!(x == y) && a[i] != b[i]) // the bits as well, so the same NaN counts as unchanged
+				return false;
+		}
+		return true;
+	}
+
 	bool VariablesEqual(const uint32_t* a, const uint32_t* b)
 	{
 		if (!a || !b)
@@ -305,17 +325,19 @@ namespace
 			return VariableString(a) == VariableString(b);
 		case VariableKind::Enum:
 			return memcmp(a + 1, b + 1, 8) == 0;
+		case VariableKind::Float:
+			return FloatsEqual(a + 1, b + 1, 1);
 		case VariableKind::Direction:
-			return memcmp(a + 1, b + 1, 12) == 0;
+			return FloatsEqual(a + 1, b + 1, 3);
 		case VariableKind::Position:
-			return memcmp(a + 1, b + 1, 24) == 0;
+			return FloatsEqual(a + 1, b + 1, 6);
 		case VariableKind::SplineData:
 		{
 			if (a[2] != b[2])
 				return false;
-			const void* pointsA = Packed<void>(a[1]);
-			const void* pointsB = Packed<void>(b[1]);
-			return a[2] == 0 || (pointsA && pointsB && memcmp(pointsA, pointsB, a[2] * 24) == 0);
+			const uint32_t* pointsA = Packed<uint32_t>(a[1]);
+			const uint32_t* pointsB = Packed<uint32_t>(b[1]);
+			return a[2] == 0 || (pointsA && pointsB && FloatsEqual(pointsA, pointsB, a[2] * 6));
 		}
 		default:
 			return a[1] == b[1];
@@ -519,6 +541,30 @@ namespace
 		return hashes;
 	}
 
+	// A resource reference: 10 words with no offsets in them (position, rotation, resource id, type, two for the type)
+	using ResourceWords = std::array<uint32_t, 10>;
+
+	// A composite's resource references sorted and without repeats, the position and rotation as numbers (-0 is 0): their
+	// order and repeats say nothing, and CathodeLib gathers them entity by entity and drops repeats, so an unchanged
+	// composite comes back from it reordered (seen on every level). False if they can't be read.
+	bool ResourceSet(const PackedArray& array, std::vector<ResourceWords>& set)
+	{
+		const uint32_t* words;
+		if (!WordsAt(array.offset, array.count * 10, words))
+			return false;
+		set.resize(array.count);
+		for (uint32_t i = 0; i < array.count; i++)
+		{
+			memcpy(set[i].data(), words + i * 10, sizeof(ResourceWords));
+			for (int f = 0; f < 6; f++)
+				if (set[i][f] == 0x80000000u)
+					set[i][f] = 0;
+		}
+		std::sort(set.begin(), set.end());
+		set.erase(std::unique(set.begin(), set.end()), set.end());
+		return true;
+	}
+
 	struct RecordDiff
 	{
 		const CompositeTemplate* current = nullptr;
@@ -545,13 +591,9 @@ namespace
 					diff.changed.push_back(entry.first);
 		}
 
-		// Resource references are 10 words each, with no offsets in them
-		const PackedArray& a = diff.current->resources;
-		const PackedArray& b = diff.incoming->resources;
-		const uint32_t* wordsA;
-		const uint32_t* wordsB;
-		diff.resourcesChanged = a.count != b.count || !WordsAt(a.offset, a.count * 10, wordsA) || !WordsAt(b.offset, b.count * 10, wordsB) ||
-			(a.count && memcmp(wordsA, wordsB, a.count * 40) != 0);
+		std::vector<ResourceWords> resourcesA, resourcesB;
+		diff.resourcesChanged = !ResourceSet(diff.current->resources, resourcesA) || !ResourceSet(diff.incoming->resources, resourcesB) ||
+			resourcesA != resourcesB;
 	}
 
 	bool PacksEqual(const EntityParameterPack* a, const EntityParameterPack* b)
@@ -1133,8 +1175,11 @@ void LIVE_LINK::TrackTransport()
 	{
 		g_transport = ~0u; // the next level starts afresh
 		g_transportStopped = kTransportPaused;
+		g_levelPlayed = false;
 		return;
 	}
+	if (g_transport == kTransportRunning && GetTickCount64() - g_transportSince >= kTransportSettleMs)
+		g_levelPlayed = true;
 	const uint32_t transport = *reinterpret_cast<uint32_t*>(EntityManager() + kManagerTransport);
 	if (transport == g_transport)
 		return;
@@ -1168,7 +1213,8 @@ const char* LIVE_LINK::EditsMustWait()
 		switch (g_transportStopped) // OpenCAGE recognises this wording and sends the edit again later
 		{
 		case kTransportPaused:
-			return "The level is still starting (its scripts only just started running)";
+			return g_levelPlayed ? "The level is paused by a cutscene or a message on screen - it only just resumed"
+				: "The level is still starting (its scripts only just started running)";
 		case kTransportPauseMenu:
 			return "The game is paused (pause menu) - it only just closed";
 		default:
@@ -1177,7 +1223,9 @@ const char* LIVE_LINK::EditsMustWait()
 	case kTransportPauseMenu:
 		return "The game is paused (pause menu)";
 	case kTransportPaused:
-		return "The level is still starting (its scripts are paused for the loading, intro and opening cutscene)";
+		// Mid-level (a cutscene, or a message waiting for the player to close it) once the level has been played
+		return g_levelPlayed ? "The level is paused by a cutscene or a message on screen (its scripts wait for it to finish)"
+			: "The level is still starting (its scripts are paused for the loading, intro and opening cutscene)";
 	default:
 		return "The level's scripts are stopped (breakpoint or single stepping)";
 	}
@@ -1304,12 +1352,26 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 	std::vector<uint32_t> modified;
 	const auto oldPacks = ParameterPacks(state.current);
 	const auto newPacks = ParameterPacks(state.incoming);
+	const auto oldAliases = AliasPaths(state.current);
+	const auto newAliases = AliasPaths(state.incoming);
+	// What a parameter pack can belong to. Retail composites also have packs for ids that are none of these (left by
+	// entities removed before release, holding only a "deleted" flag): nothing reads them, and CathodeLib drops them when
+	// it loads a level, so their going is no change
+	std::unordered_set<uint32_t> owners;
+	for (const auto& entry : oldTypes) owners.insert(entry.first);
+	for (const auto& entry : newTypes) owners.insert(entry.first);
+	for (const auto& entry : oldProxies) owners.insert(entry.first);
+	for (const auto& entry : newProxies) owners.insert(entry.first);
+	for (const auto& entry : oldAliases) owners.insert(entry.first);
+	for (const auto& entry : newAliases) owners.insert(entry.first);
+	ConnectorIds(state.current, owners);
+	ConnectorIds(state.incoming, owners);
 	std::unordered_set<uint32_t> packIds;
 	for (const auto& entry : oldPacks) packIds.insert(entry.first);
 	for (const auto& entry : newPacks) packIds.insert(entry.first);
 	for (uint32_t id : packIds)
 	{
-		if (remade.count(id))
+		if (remade.count(id) || !owners.count(id))
 			continue;
 		auto oldPack = oldPacks.find(id);
 		auto newPack = newPacks.find(id);
@@ -1333,8 +1395,6 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 
 	// An alias pointed somewhere else (same id, new path - a refactor or an undo re-paths aliases in place): its override
 	// has to come off what it pointed at and land on what it points at now, even when its values did not change
-	const auto oldAliases = AliasPaths(state.current);
-	const auto newAliases = AliasPaths(state.incoming);
 	const bool aliasesChanged = oldAliases != newAliases;
 	std::unordered_set<uint32_t> repointed;
 	for (const auto& entry : newAliases)
@@ -1349,10 +1409,16 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 	}
 
 	// A variable's default is read through the instance: a changed one live edits the instance itself, whose own live
-	// edit handling live edits or refreshes everything in it
-	std::unordered_set<uint32_t> variables;
+	// edit handling live edits or refreshes everything in it. Not for a variable the running instances never had (nothing
+	// there reads it yet), and never for the level's root composite: its one instance is the whole level, so that would
+	// start every script in the level over (found restarting a mission and taking the game down); nothing outside feeds
+	// the root's variables, and their defaults are read when the level loads.
+	std::unordered_set<uint32_t> variables, runningVariables;
 	ConnectorIds(state.current, variables);
+	ConnectorIds(state.current, runningVariables);
 	ConnectorIds(state.incoming, variables);
+	const bool isRoot = *reinterpret_cast<uint32_t*>(EntityManager() + kManagerRootGuid) == compositeGuid;
+	size_t rootVariablesSkipped = 0;
 
 	const std::vector<Allocation*> instanceList = ArrayItems(state.current->instances);
 	std::vector<EntityRef*> held;
@@ -1372,6 +1438,13 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 		{
 			if (variables.count(guid))
 			{
+				if (!runningVariables.count(guid))
+					continue;
+				if (isRoot)
+				{
+					rootVariablesSkipped++;
+					continue;
+				}
 				if (instancesEdited.insert(instance).second)
 				{
 					InterlockedIncrement(&instance->references);
@@ -1490,11 +1563,17 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 	else
 		g_failedConstructs[compositeGuid] = { state.current, constructFailed };
 
+	// Variables are counted on their own: "modified" is the entities
+	const size_t variablesChanged = std::count_if(modified.begin(), modified.end(), [&](uint32_t id) { return variables.count(id) != 0; });
 	char summary[256];
 	snprintf(summary, sizeof(summary), "Applied to %zu instance(s): %zu added, %zu removed, %zu modified (%d entity operations done, %d not)",
-		instanceList.size(), added.size() + addedProxies.size() - retried, removed.size() + removedProxies.size(), modified.size(), done, failed);
+		instanceList.size(), added.size() + addedProxies.size() - retried, removed.size() + removedProxies.size(), modified.size() - variablesChanged, done, failed);
 	result.ok = failed == 0 && flushFailed == 0;
 	result.message = summary;
+	if (variablesChanged)
+		result.message += ". " + std::to_string(variablesChanged) + " of the composite's variables added, removed or changed";
+	if (rootVariablesSkipped)
+		result.message += " - the level's root composite reads its variables' defaults when the level loads: save and reload to use changed ones";
 	if (retried)
 		result.message += ". Retried " + std::to_string(retried) + " that could not be constructed before";
 	if (skippedAsOnLoad)

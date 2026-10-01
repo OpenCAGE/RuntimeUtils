@@ -682,9 +682,9 @@ void LIVE_LINK_SERVER::ProcessEntityRequests()
 				// Counted from when it came in, so the answer is always well inside OpenCAGE's 30 s
 				if (wait && now - request.arrived >= kMaxEditWaitMs)
 				{
-					// The reason stays first: OpenCAGE's auto push recognises it by that and sends its edits again
+					// The reason stays first: OpenCAGE recognises it by that and sends its edits again
 					refusing = std::string(wait) + " - not carried out (edits and calls were held for 20 s, and the level is still not being played); "
-						"send it again once it is (STATUS playing=1). OpenCAGE's auto push does that for its own edits";
+						"send it again once it is (STATUS playing=1). OpenCAGE sends its own edits again by itself";
 					DevTools::Log("LiveLink: request %u refused, with anything held behind it: %s", request.command, refusing.c_str());
 					for (Request& before : held) // cannot happen in order, but keep the rule simple: nothing held survives
 						Reply(before, false, refusing);
