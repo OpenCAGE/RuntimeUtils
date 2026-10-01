@@ -2,6 +2,7 @@
 #include "LIVE_LINK.h"
 #include "LIVE_CAMERA.h"
 #include "LIVE_ANIMATION.h"
+#include "LIVE_TRACE.h"
 #include "GAME_LEVEL_MANAGER.h"
 #include "SCREENSHOT.h"
 #include "DevTools.h"
@@ -479,6 +480,56 @@ namespace
 		Reply(request, result.ok, result.message);
 	}
 
+	// What to trace is only stored here (the hooks on the game's own firing of outputs, reading and writing of parameters
+	// and calling of methods gather the activity, see LIVE_TRACE.h), so it is answered at once too: OpenCAGE sends it
+	// whenever the flowgraphs it shows change.
+	void HandleTrace(const Request& request)
+	{
+		Reader reader(request.payload);
+		const uint32_t root = reader.U32();
+		const uint8_t on = reader.U8();
+		bool malformed = reader.failed || on > 1;
+		std::vector<LIVE_TRACE::Watch> watches;
+		if (!malformed && on)
+		{
+			const uint32_t count = reader.U32();
+			malformed = reader.failed || count == 0 || count > LIVE_TRACE::kMaxWatches;
+			for (uint32_t i = 0; i < count && !malformed; i++)
+			{
+				LIVE_TRACE::Watch watch;
+				watch.composite = reader.U32();
+				const uint32_t pathCount = reader.U32();
+				watch.any = pathCount == LIVE_TRACE::kAnyInstance;
+				if (!watch.any && pathCount > LIVE_TRACE::kMaxPath)
+				{
+					malformed = true;
+					break;
+				}
+				for (uint32_t step = 0; !watch.any && step < pathCount && !reader.failed; step++)
+					watch.path.push_back(reader.U32());
+				malformed = reader.failed;
+				watches.push_back(std::move(watch));
+			}
+		}
+		const LIVE_LINK::Result result = malformed ? LIVE_LINK::Result{ false, "Malformed request" } : LIVE_TRACE::Set(request.connection, root, on != 0, std::move(watches));
+		Reply(request, result.ok, result.message);
+	}
+
+	// What was gathered is handed over at once as well: OpenCAGE asks for it several times a second while it shows activity.
+	void HandleTraceGet(const Request& request)
+	{
+		Reader reader(request.payload);
+		const uint32_t root = reader.U32();
+		if (reader.failed)
+		{
+			Reply(request, false, "Malformed request");
+			return;
+		}
+		std::vector<uint8_t> payload; // left empty when refused
+		const LIVE_LINK::Result result = LIVE_TRACE::Take(request.connection, root, payload);
+		Reply(request, result.ok, result.message, payload);
+	}
+
 	void QueueBinaryMessage(const std::vector<uint8_t>& message)
 	{
 		Request request;
@@ -518,6 +569,16 @@ namespace
 			HandleAnimationGet(request);
 			return;
 		}
+		if (request.command == LIVE_LINK_SERVER::TRACE)
+		{
+			HandleTrace(request);
+			return;
+		}
+		if (request.command == LIVE_LINK_SERVER::TRACE_GET)
+		{
+			HandleTraceGet(request);
+			return;
+		}
 
 		std::lock_guard<std::mutex> lock(g_queueMutex);
 		switch (request.command)
@@ -550,7 +611,9 @@ namespace
 			g_client = INVALID_SOCKET;
 		}
 		closesocket(client);
-		g_connection++;
+		const uint32_t ended = g_connection++;
+		// Script activity is traced for a connection only: it stops with it (before another can connect)
+		LIVE_TRACE::ConnectionEnded(ended);
 		DropQueuedReplies();
 		g_connected = false;
 		DevTools::Log("LiveLink: OpenCAGE disconnected");

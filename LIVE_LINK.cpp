@@ -2,6 +2,7 @@
 #include "LIVE_LINK_SERVER.h"
 #include "LIVE_CAMERA.h"
 #include "LIVE_ANIMATION.h"
+#include "LIVE_TRACE.h"
 #include "DEBUG_MARKER.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -898,6 +899,8 @@ namespace
 		alignas(8) uint8_t temporaryEntity[0x40] = {};
 		*reinterpret_cast<Allocation**>(temporaryEntity + kTemporaryEntityTarget) = entity.ptr;
 		call_custom_method(temporaryEntity, &entity.ptr, &op.method, 0);
+		// The call is queued another way than a link's, so script activity tracing (when on) notes it here: a call with no caller
+		LIVE_TRACE::NoteOwnCall(entity.ptr, op.method);
 	}
 
 	// ---- Applying an image ----
@@ -2766,10 +2769,12 @@ Result LIVE_LINK::Status()
 	const std::string cameraSync = std::string("\ncamera_sync=") + (LIVE_CAMERA::Applying() ? "1" : "0");
 	// Whether it has an animation taken for OpenCAGE (the ANIMATION command, carried out every entity frame - see above)
 	const std::string animation = std::string("\nanimation=") + (LIVE_ANIMATION::Driving() ? "1" : "0");
+	// Whether this connection has script activity traced (the TRACE command, gathered by the hooks in LIVE_TRACE.cpp)
+	const std::string trace = std::string("\ntrace=") + (LIVE_TRACE::Tracing() ? "1" : "0");
 	if (!LevelRunning())
 	{
 		result.ok = true;
-		result.message = "running=0" + cameraSync + animation;
+		result.message = "running=0" + cameraSync + animation + trace;
 		return result;
 	}
 	const uint32_t rootGuid = *reinterpret_cast<uint32_t*>(manager + kManagerRootGuid);
@@ -2788,6 +2793,6 @@ Result LIVE_LINK::Status()
 	CameraReading camera;
 	if (Guarded("reading the camera", ReadCameraBody, &camera) && camera.ok)
 		result.message += "\ncamera=" + Triple(camera.position) + "\ncamera_forward=" + Triple(camera.forward) + "\ncamera_up=" + Triple(camera.up);
-	result.message += cameraSync + animation;
+	result.message += cameraSync + animation + trace;
 	return result;
 }

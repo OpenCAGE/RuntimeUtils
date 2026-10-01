@@ -12,6 +12,7 @@
 #include "LIVE_LINK.h"
 #include "LIVE_LINK_SERVER.h"
 #include "LIVE_CAMERA.h"
+#include "LIVE_TRACE.h"
 
 // External includes.
 #include <detours.h>
@@ -176,6 +177,11 @@ static void AttachHooks(bool attach)
     // run and gated by the pose instead: Cinematic Tools hooks the same function later (MinHook), and the two chain.
     if (config.liveLink && config.liveLinkCamera)
         hook(LIVE_CAMERA::synchronize_with_engine, LIVE_CAMERA::h_synchronize_with_engine);
+
+    // Live link script activity: the game's firing of outputs and reading of parameters, noted for the composites OpenCAGE
+    // watches while it asks. They only pass through (after checking a flag) otherwise.
+    if (config.liveLink)
+        LIVE_TRACE::AttachHooks(attach);
 
     // A hook on the start of gameplay (it only passes through).
     hook(GameFlow::start_gameplay, GameFlow::h_start_gameplay);

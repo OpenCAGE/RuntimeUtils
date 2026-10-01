@@ -24,17 +24,18 @@ struct IDXGISwapChain;
 	the game camera, answering at once - they are never queued behind edits held while a level starts - and the camera
 	hook applies the pose (see LIVE_CAMERA.cpp). ANIMATION and ANIMATION_GET are answered at once the same way: the
 	request is stored, or the entity thread's last snapshot of what it did with it read, and the entity thread carries
-	it out every frame (see LIVE_ANIMATION.h).
+	it out every frame (see LIVE_ANIMATION.h). So are TRACE and TRACE_GET: what to trace is stored, or what the trace hooks
+	gathered handed over, and the hooks gather it on whichever threads run the level's scripts (see LIVE_TRACE.h).
 */
 namespace LIVE_LINK_SERVER
 {
 	enum Command : uint16_t
 	{
-		STATUS = 1,          // -> message "running=0|1\nroot=..\nroot_name=..\ntemplates=..\nstate=..\nplaying=0|1\nloading=0|1[\nloading_reason=..]\ncamera=x,y,z\ncamera_forward=..\ncamera_up=..\ncamera_sync=0|1\nanimation=0|1"
+		STATUS = 1,          // -> message "running=0|1\nroot=..\nroot_name=..\ntemplates=..\nstate=..\nplaying=0|1\nloading=0|1[\nloading_reason=..]\ncamera=x,y,z\ncamera_forward=..\ncamera_up=..\ncamera_sync=0|1\nanimation=0|1\ntrace=0|1"
 		                     //    (CALL_METHOD and APPLY_COMPOSITE are held while loading=1 - scripts paused, or running again for under 5 s:
 		                     //    level starting, pause menu - and turned away after 20 s; camera_sync=1 while the game renders from CAMERA's pose;
 		                     //    animation=1 while the game has a CAGEAnimation taken for ANIMATION - held, played, or waiting to be given back
-		                     //    - as of the last frame)
+		                     //    - as of the last frame; trace=1 while this connection has watches set by TRACE)
 		CALL_METHOD = 2,     // u32 root (0: any), u32 composite, u32 entity, u32 method, u32 path count, u32 path[count] (instance entity ids from the root)
 		APPLY_COMPOSITE = 3, // u32 root (0: any), u32 composite, u32 image size, image, u32 relocation count, u32 relocations[count]
 		LOAD_LEVEL = 4,      // u32 length, level name (e.g. "PRODUCTION\\BSP_TORRENS" or "BSP_TORRENS")
@@ -70,6 +71,30 @@ namespace LIVE_LINK_SERVER
 		                     //    so a newer request that waits leaves it as it was; frame is bumped by every entity frame that wrote it;
 		                     //    was_playing=1 if the game was advancing the animation when it was taken. Never refused (a malformed request
 		                     //    aside).
+		TRACE = 11,          // u32 root (0: any level), u8 on (0: stop tracing - nothing follows; 1: trace the watches that follow), then only if on:
+		                     //    u32 watch count (1..512), per watch: u32 composite, u32 path count (0xFFFFFFFF: every instance of the composite;
+		                     //    otherwise at most 64), u32 path[count] (instance entity ids from the root to the watched instance; none: the
+		                     //    root itself). -> "Tracing N composite(s)" / "Tracing stopped"; refused "Malformed request" (sizes, more than 512
+		                     //    watches, a path over 64; a game from before 512 refuses more than 32 this way) or "Another level is running"
+		                     //    (root not 0, a level running, and its root another - which also stops the trace that was running).
+		                     //    While no level runs it is stored, and applies when the level with that root runs. While on, the game gathers
+		                     //    the script activity in the watched instances (see LIVE_TRACE.h) for TRACE_GET to take. A new TRACE replaces the
+		                     //    previous one (anything not yet taken is dropped); it belongs to this connection: a disconnect stops it.
+		TRACE_GET = 12,      // u32 root (0: any) -> message "records=N dropped=D" and a payload: u32 format (1), u32 batch (every take since the
+		                     //    game started), u32 dropped (distinct activities not kept since the last take because 4096 were), u32 record
+		                     //    count, then per record: u8 kind (1: an entity fired one of its outputs; 2: an entity read a parameter through
+		                     //    a data link; 3: an entity sent a value out through a data link, or looked up what a pin is attached to; 4: a
+		                     //    method was called through a logic link), u8 path count, u8 source path count (kinds 2-4; else 0), u8 0, u32
+		                     //    count (times since the last take, saturating), u32 age (ms since it last happened, as of this answer), u32
+		                     //    composite (the one holding the entity: its owner instance's; 0 for the root instance), u32 entity (its id
+		                     //    there; kind 4: the entity whose method was called), u32 pin (kind 1: the output fired; 2: the parameter read; 3:
+		                     //    the pin written through; 4: the method), u32 self (the composite the entity is an instance of; else 0), kinds
+		                     //    2-4 only: u32 source composite, u32 source entity, u32 source pin, u32 source self (kinds 2 and 3: the link's
+		                     //    other end - where a read came from, where a write went; kind 4: the entity that called and the output it
+		                     //    fired, all 0 for a call CALL_METHOD made; the same way), then u32 path[path count] (instance entity ids
+		                     //    from the root to the instance holding the entity), kinds 2-4 only: u32 source path[source path count].
+		                     //    Everything handed over is cleared. Not tracing: no records. Refused only when malformed or while another level
+		                     //    runs.
 	};
 
 	void Start(uint16_t port);
