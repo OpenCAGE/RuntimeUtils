@@ -14,8 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -568,12 +570,35 @@ namespace
 		return true;
 	}
 
+	// A link, as the template keeps it: the entity it is kept on, that entity's parameter, the entity it links to and
+	// that one's parameter. Records of { entity, offset, count } point at the links, each { id, parameter, linked
+	// parameter, linked entity } - the id is the editor's own and says nothing about where anything goes.
+	using LinkKey = std::array<uint32_t, 4>;
+	struct LinkRecord { uint32_t entity; uint32_t offset; uint32_t count; };
+	static_assert(sizeof(LinkRecord) == 12, "LinkRecord layout");
+
+	std::set<LinkKey> LinkSet(const CompositeTemplate* composite)
+	{
+		std::set<LinkKey> links;
+		const LinkRecord* records = Packed<LinkRecord>(composite->links.offset);
+		for (uint32_t i = 0; records && i < composite->links.count; i++)
+		{
+			const uint32_t* words;
+			if (!WordsAt(records[i].offset, records[i].count * 4, words) || !words)
+				continue;
+			for (uint32_t l = 0; l < records[i].count; l++)
+				links.insert({ records[i].entity, words[l * 4 + 1], words[l * 4 + 3], words[l * 4 + 2] });
+		}
+		return links;
+	}
+
 	struct RecordDiff
 	{
 		const CompositeTemplate* current = nullptr;
 		const CompositeTemplate* incoming = nullptr;
 		std::vector<uint32_t> changed;  // entities whose animation or sequence record differs (or appeared/went)
 		bool resourcesChanged = false;
+		std::vector<LinkKey> linksChanged; // links there in one template and not the other
 	};
 
 	void RecordDiffBody(void* context)
@@ -597,6 +622,10 @@ namespace
 		std::vector<ResourceWords> resourcesA, resourcesB;
 		diff.resourcesChanged = !ResourceSet(diff.current->resources, resourcesA) || !ResourceSet(diff.incoming->resources, resourcesB) ||
 			resourcesA != resourcesB;
+
+		const std::set<LinkKey> linksA = LinkSet(diff.current);
+		const std::set<LinkKey> linksB = LinkSet(diff.incoming);
+		std::set_symmetric_difference(linksA.begin(), linksA.end(), linksB.begin(), linksB.end(), std::back_inserter(diff.linksChanged));
 	}
 
 	bool PacksEqual(const EntityParameterPack* a, const EntityParameterPack* b)
@@ -1275,7 +1304,8 @@ const char* LIVE_LINK::EditsMustWait()
 	}
 }
 
-Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const uint8_t* image, uint32_t imageSize, const uint32_t* relocations, uint32_t relocationCount)
+Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const uint8_t* image, uint32_t imageSize, const uint32_t* relocations, uint32_t relocationCount,
+	const std::vector<DataPin>& dataPins)
 {
 	Result result;
 	if (const char* notReady = NotReadyForEdits())
@@ -1464,6 +1494,32 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 	const bool isRoot = *reinterpret_cast<uint32_t*>(EntityManager() + kManagerRootGuid) == compositeGuid;
 	size_t rootVariablesSkipped = 0;
 
+	// A data link that came or went changes the value something reads, as editing the parameter would: what the data goes
+	// into is live edited the same way, so it takes the value up (a light its colour, say - the emptied caches alone would
+	// only be noticed the next time it happens to read). Into the entity the link is kept on, or out of it into the one
+	// at the other end, as OpenCAGE says of each pin; a link with no such pin fires a method, and the emptied caches are
+	// all that needs. Never into one of the composite's variables: those are read through the instance, and live editing
+	// that would start everything in it over.
+	std::map<std::pair<uint32_t, uint32_t>, uint32_t> dataPinDirections;
+	for (const DataPin& pin : dataPins)
+		dataPinDirections[{ pin.entity, pin.parameter }] = pin.direction;
+	std::vector<uint32_t> fedByLinks;
+	for (const LinkKey& link : records.linksChanged)
+	{
+		auto pin = dataPinDirections.find({ link[0], link[1] });
+		if (pin == dataPinDirections.end())
+			continue;
+		const uint32_t fed = pin->second == DATA_INTO_OWNER ? link[0] : pin->second == DATA_OUT_OF_OWNER ? link[2] : 0;
+		if (!fed || remade.count(fed) || variables.count(fed) || (!newTypes.count(fed) && !newProxies.count(fed)))
+			continue;
+		if (std::find(modified.begin(), modified.end(), fed) != modified.end() || std::find(fedByLinks.begin(), fedByLinks.end(), fed) != fedByLinks.end())
+			continue;
+		fedByLinks.push_back(fed);
+		modified.push_back(fed);
+	}
+	for (uint32_t fed : fedByLinks)
+		DevTools::Log("LiveLink:   %s is fed by a data link that changed", Hex(fed).c_str());
+
 	const std::vector<Allocation*> instanceList = ArrayItems(state.current->instances);
 	std::vector<EntityRef*> held;
 	for (Allocation* instance : instanceList)
@@ -1614,6 +1670,8 @@ Result LIVE_LINK::ApplyComposite(uint32_t root, uint32_t compositeGuid, const ui
 		instanceList.size(), added.size() + addedProxies.size() - retried, removed.size() + removedProxies.size(), modified.size() - variablesChanged, done, failed);
 	result.ok = failed == 0 && flushFailed == 0;
 	result.message = summary;
+	if (!fedByLinks.empty())
+		result.message += ". " + std::to_string(fedByLinks.size()) + " of those modified because a data link into them changed";
 	if (variablesChanged)
 		result.message += ". " + std::to_string(variablesChanged) + " of the composite's variables added, removed or changed";
 	if (rootVariablesSkipped)

@@ -89,10 +89,19 @@ namespace LIVE_LINK
 	// The game's level manager, from the game's globals (null before it exists).
 	void* LevelManager();
 
+	// A pin a data link goes through, as OpenCAGE sees it (the image cannot say which links carry data): the entity the
+	// link is kept on, its parameter, and which way the data goes - into that entity, which reads its value through the
+	// link, or out of it, into the entity at the other end of the link.
+	enum DataDirection : uint32_t { DATA_INTO_OWNER = 1, DATA_OUT_OF_OWNER = 2 };
+	struct DataPin { uint32_t entity; uint32_t parameter; uint32_t direction; };
+	static_assert(sizeof(DataPin) == 12, "DataPin layout");
+
 	// Replaces a composite's scripting with the given PAK image (as CathodeLib writes it for the live link) and brings
 	// its running instances in line.
 	// root: the root composite of the level OpenCAGE has open (0: any) - refused if the game is running another level.
-	Result ApplyComposite(uint32_t root, uint32_t compositeGuid, const uint8_t* image, uint32_t imageSize, const uint32_t* relocations, uint32_t relocationCount);
+	// dataPins: the pins of the composite's data links, so that what a changed one feeds reads its value afresh.
+	Result ApplyComposite(uint32_t root, uint32_t compositeGuid, const uint8_t* image, uint32_t imageSize, const uint32_t* relocations, uint32_t relocationCount,
+		const std::vector<DataPin>& dataPins);
 
 	// Calls a method on an entity: in the instance at the given path of composite-instance entity ids from the root, or in
 	// every instance of the composite when the path is empty.

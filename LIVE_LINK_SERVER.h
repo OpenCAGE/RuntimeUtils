@@ -37,7 +37,11 @@ namespace LIVE_LINK_SERVER
 		                     //    animation=1 while the game has a CAGEAnimation taken for ANIMATION - held, played, or waiting to be given back
 		                     //    - as of the last frame; trace=1 while this connection has watches set by TRACE)
 		CALL_METHOD = 2,     // u32 root (0: any), u32 composite, u32 entity, u32 method, u32 path count, u32 path[count] (instance entity ids from the root)
-		APPLY_COMPOSITE = 3, // u32 root (0: any), u32 composite, u32 image size, image, u32 relocation count, u32 relocations[count]
+		APPLY_COMPOSITE = 3, // u32 root (0: any), u32 composite, u32 image size, image, u32 relocation count, u32 relocations[count],
+		                     //    then (optional - older OpenCAGE builds stop here) u32 data pin count, { u32 entity, u32 parameter,
+		                     //    u32 direction (1: into that entity, 2: out of it, into the entity it links to) }[count]: the
+		                     //    pins of the composite's data links, by the entity each link is kept on. Whatever a data link that
+		                     //    came or went feeds is live edited, as if its parameter had been edited.
 		LOAD_LEVEL = 4,      // u32 length, level name (e.g. "PRODUCTION\\BSP_TORRENS" or "BSP_TORRENS")
 		SCREENSHOT = 5,      // u32 length, path of a .bmp to write (nothing else is written)
 		DESCRIBE = 6,        // u32 composite -> message listing its running instances

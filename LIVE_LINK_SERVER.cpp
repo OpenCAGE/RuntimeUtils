@@ -882,7 +882,22 @@ void HandleEntityRequest(Request& request)
 			std::vector<uint32_t> relocationList(relocationCount);
 			if (relocationCount)
 				memcpy(relocationList.data(), relocations, relocationCount * 4);
-			result = LIVE_LINK::ApplyComposite(root, composite, image, imageSize, relocationList.data(), relocationCount);
+			// The data links' pins follow, from an OpenCAGE that sends them (one from before them ends here)
+			std::vector<LIVE_LINK::DataPin> dataPins;
+			if (reader.position < reader.data.size())
+			{
+				const uint32_t pinCount = reader.U32();
+				const uint8_t* pins = pinCount <= kMaxMessage / sizeof(LIVE_LINK::DataPin) ? reader.Bytes(pinCount * sizeof(LIVE_LINK::DataPin)) : nullptr;
+				if (reader.failed || (pinCount && !pins))
+				{
+					result.message = "Malformed request";
+					break;
+				}
+				dataPins.resize(pinCount);
+				if (pinCount)
+					memcpy(dataPins.data(), pins, pinCount * sizeof(LIVE_LINK::DataPin));
+			}
+			result = LIVE_LINK::ApplyComposite(root, composite, image, imageSize, relocationList.data(), relocationCount, dataPins);
 			SetActivity(result.message);
 			break;
 		}
